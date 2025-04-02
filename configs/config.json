@@ -1,0 +1,40 @@
+{
+    "tools": {
+        "vartrix": "src/vatrix/vatrix-linux"
+    },
+    "volumes": [
+        {
+            "name": "working_directory",
+            "host": "/home/b05b01002/HDD/project_scRNAed",
+            "container": "/local",
+            "mode": "rw",
+            "is_workspace": true
+        },
+        {
+            "name": "YCLlab_raw_data",
+            "host": "/home/woodydrylab/YCLlab_raw_data/",
+            "container": "/home/woodydrylab/YCLlab_raw_data/",
+            "mode": "ro",
+            "is_workspace": false
+        }
+    ],
+    "samples": [
+        {
+            "name": "ptr_tenx_batch1",
+            "platform": "10x",
+            "species": "ptr",
+            "sample_names": "YCL",
+            "fastq_path": [
+                "/home/woodydrylab/YCLlab_raw_data/YCLlab_Rawdata/RNA-seq/03_Single_cell_sequencing/TENxGenomics/TEN_Populus_trichocarpa/TEN_Populus_trichocarpa_Batch1/fastq_path/HS18186/YCL/"
+            ]
+        }
+    ],
+    "references": [
+        {
+            "species": "ptr",
+            "assembly": "references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa",
+            "annotation-gff": "references/Ptr/annotation/Ptrichocarpa_533_v4.1.gene_exons.gff3",
+            "annotation-gtf": "references/Ptr/annotation/Ptrichocarpa_533_v4.1.gene_exons.gtf"
+        }
+    ]
+}
