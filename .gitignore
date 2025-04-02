@@ -1,1 +1,8 @@
 test/*
+references/*
+src/*
+outputs/*
+*tmp*
+nohup-out/*
+logs/*
+.snakemake
