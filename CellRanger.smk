@@ -6,11 +6,7 @@ wildcard_constraints:
     random_seed="[0-9]+",
     gff_ext="gff|gff3"
 
-# get tools
-CellRanger=config["tools"]["cellranger"]
-vartrix=config["tools"]["vartrix"]
-
-# create docker mount points
+# set docker mount points
 docker_mount = ""
 for volume in config["volumes"]:
     docker_mount += "-v %s:%s:%s " % (
@@ -52,6 +48,7 @@ rule CellRanger_count:
         outdir=directory("outputs/CellRanger/count/{sample}"),
         out_matrix="outputs/CellRanger/count/{sample}/outs/filtered_feature_bc_matrix.h5",
         out_bam="outputs/CellRanger/count/{sample}/outs/possorted_genome_bam.bam",
+        out_barcodes="outputs/CellRanger/count/{sample}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz",
         tmpdir=temp(directory("{sample}_count_tmp"))
     params:
         create_bam="true",
