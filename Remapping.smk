@@ -36,11 +36,11 @@ rule renamer:
         bam="outputs/CellRanger/count/{sample}/outs/possorted_genome_bam.bam",
         barcodes_gz="outputs/CellRanger/count/{sample}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz"
     output:
-        barcodes=temp("outputs/Remapping/renamer/{sample}/barcodes.tsv"),
+        barcodes="outputs/Remapping/renamer/{sample}/barcodes.tsv",
         fq="outputs/Remapping/renamer/{sample}/fq.fq"
     log:
         "logs/Remapping/renamer/{sample}.log"
-    script:
+    shell:
         """
         # unzip barcodes.tsv.gz
         gunzip -c {input.barcodes_gz} 1> {output.barcodes} 2> {log}
@@ -50,7 +50,7 @@ rule renamer:
             {docker_mount} \
             -u $(id -u) \
             --rm \
-            biocontainers/pysam:v0.15.2ds-2-deb-py3_cv1 \
+            chiaenu/pysam:0.23.0 \
                 python src/souporcell/renamer.py \
                 --bam {input.bam} \
                 --barcodes {output.barcodes} \
@@ -75,11 +75,12 @@ rule minimap2:
             {docker_mount} \
             -u $(id -u) \
             --rm \
-            minimap2 \
-                -ax splice -t {threads} -G50k -k 21 -w 11 --sr \
-                -A2 -B8 -O12,32 -E2,1 -r200 -p.5 -N20 -f1000,5000 \
-                -n2 -m20 -s40 -g2000 -2K50m --secondary=no \
-                {input.ref} {input.fq} \
+            staphb/minimap2:2.28 \
+                minimap2 \
+                    -ax splice -t {threads} -G50k -k 21 -w 11 --sr \
+                    -A2 -B8 -O12,32 -E2,1 -r200 -p.5 -N20 -f1000,5000 \
+                    -n2 -m20 -s40 -g2000 -2K50m --secondary=no \
+                    {input.ref} {input.fq} \
                 1> {output.sam} \
                 2> {log}
         """
@@ -98,7 +99,7 @@ rule retag:
             {docker_mount} \
             -u $(id -u) \
             --rm \
-            biocontainers/pysam:v0.15.2ds-2-deb-py3_cv1 \
+            chiaenu/pysam:0.23.0 \
                 python src/souporcell/retag.py \
                     --sam {input.sam} \
                     --out {output.tagged_bam} \
@@ -121,10 +122,11 @@ rule samtools_sort:
             {docker_mount} \
             -u $(id -u) \
             --rm \
+            biocontainers/samtools:v1.9-4-deb_cv1 \
             samtools sort \
                 -@ {threads} \
+                -o {output.sorted_bam} \
                 {input.tagged_bam} \
-                {output.sorted_bam} \
                 1> {log} \
                 2> {log}
         """
@@ -144,6 +146,7 @@ rule samtools_index:
             {docker_mount} \
             -u $(id -u) \
             --rm \
+            biocontainers/samtools:v1.9-4-deb_cv1 \
             samtools index \
                 -@ {threads} \
                 {input.sorted_bam} \
