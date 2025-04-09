@@ -73,7 +73,8 @@ rule CellRanger_count:
         2> {log} \
         1> {log} \
         && mkdir -p {output.outdir} \
-        && mv {output.tmpdir}/* {output.outdir}
+        && rm -rf {output.outdir}/* \
+        && mv -t {output.outdir} {output.tmpdir}/* 
         """ 
 
 # ================= CellRanger mkref =================
