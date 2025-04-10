@@ -29,11 +29,11 @@ def get_ref_by_sample(wildcards):
     return query(config["references"], "species", species)["assembly"]
 
 # call_chromosomes_vcf_by_sample: call for vcf files per chromosome (used in bcftools_merge rule)
-def call_chromosomes_vcf_by_sample(wildcards):
+def call_chromosomes_vcf_gz_by_sample(wildcards):
     species = query(config["samples"], "name", wildcards.sample)["species"]
     chromosomes = query(config["references"], "species", species)["chromosomes"]
     return [
-        f"outputs/VariantCalling/freebayes/{wildcards.sample}/{chrom}.vcf"
+        f"outputs/VariantCalling/freebayes/{wildcards.sample}/{chrom}.vcf.gz"
         for chrom in chromosomes
     ]
 
@@ -68,24 +68,50 @@ rule freebayes_by_chromosome:
                     2> {log}
         """
 
-# 2. Merging vcf files
+# 2. Compressing vcf files with bgzip (will create temporary .gz files)
+rule bgzip:
+    input:
+        "{file}"
+    output:
+        temp("{file}.gz")
+    log:
+        "logs/gzip/{file}.log"
+    shell:
+        """
+        docker run \
+            {docker_mount} \
+            -u $(id -u) \
+            --rm \
+            staphb/htslib:1.21 \
+                bgzip -c {input} \
+            1> {output} \
+            2> {log}
+        """
+
+# 3. Merging vcf files (using gzipped vcf files)
 rule bcftools_merge:
     input:
-        call_chromosomes_vcf_by_sample
+        call_chromosomes_vcf_gz_by_sample
     output:
         vcf="outputs/VariantCalling/bcftools_merge/{sample}.vcf"
     log:
         "logs/VariantCalling/bcftools_merge/{sample}.log"
     shell:
         """
+        # merge vcf files
         docker run \
             {docker_mount} \
+            -u $(id -u) \
             --rm \
-            biocontainers/bcftools:v1.9-1-deb_cv1 \
+            staphb/bcftools:1.21 \
                 bcftools merge \
                     -O v \
                     -o {output.vcf} \
-                    {input}
+                    --no-index \
+                    --force-samples \
+                    {input} \
+            1> {log} \
+            2> {log}
         """
 
 # ==== Calling single-cell variants using vartrix ====
@@ -104,13 +130,16 @@ rule get_vartrix:
 rule vartrix:
     threads: 24
     input:
+        vartrix_exec="src/vartrix/vartrix_linux",
         bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam",
         barcodes="outputs/Remapping/renamer/{sample}/barcodes.tsv",
         vcf="outputs/VariantCalling/bcftools_merge/{sample}.vcf",
-        fasta="outputs/Remapping/renamer/{sample}/fq.fq"
+        fasta=get_ref_by_sample
     output:
         ref_matrix="outputs/VariantCalling/vartrix/{sample}/ref.mtx",
         alt_matrix="outputs/VariantCalling/vartrix/{sample}/alt.mtx"
+    log:
+        "logs/VariantCalling/vartrix/{sample}.log"
     shell:
         """
         src/vartrix/vartrix_linux \
