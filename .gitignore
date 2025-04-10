@@ -1,6 +1,6 @@
 test/*
 references/*
-src/*
+src/cellranger-9.0.1/*
 outputs/*
 *tmp*
 nohup-out/*
