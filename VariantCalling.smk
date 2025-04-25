@@ -156,3 +156,26 @@ rule vartrix:
             1> {log} \
             2> {log}
         """
+
+
+# ==== vawk parse vcf file for downstream analysis =====
+rule vawk_parse_vcf:
+    input:
+        vcf="outputs/VariantCalling/bcftools_merge/{sample}.vcf"
+    output:
+        vcf_parsed="outputs/VariantCalling/vawk/{sample}.snv.loci.txt"
+    log:
+        "logs/VariantCalling/vawk/{sample}.log"
+    shell:
+        """
+        docker run \
+            {docker_mount} \
+            -u $(id -u) \
+            --rm \
+            chiaenu/vawk:0.0.2 \
+                vawk '{{print $1,$2}}' {input.vcf} \
+                    1> {output.vcf_parsed} \
+                    2> {log}
+
+        sed -i 's/\s/:/g' {output.vcf_parsed}
+        """
