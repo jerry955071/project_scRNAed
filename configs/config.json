@@ -16,6 +16,13 @@
             "container": "/home/woodydrylab/YCLlab_raw_data/",
             "mode": "ro",
             "is_workspace": false
+        },
+        {
+            "name": "project_RE",
+            "host": "/home/b05b01002/HDD/project_RE",
+            "container": "/home/b05b01002/HDD/project_RE",
+            "mode": "ro",
+            "is_workspace": false
         }
     ],
     "samples": [
