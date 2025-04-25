@@ -1,0 +1,397 @@
+# run with: docker run --rm -it -v $(pwd):/data -w /data satijalab/seurat:5.0.0 R
+# working directory: snakemake main directory
+
+Load libraries
+```{R}
+library(Seurat)
+library(Matrix)
+library(stringr)
+library(magrittr)
+library(uwot)
+```
+
+Load data
+```{R}
+# set paths
+path_barcodes <- "outputs/Remapping/renamer/ptr_tenx_batch1/barcodes.tsv"
+path_snv_loci <- "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.txt"
+path_alt_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/alt.mtx"
+path_ref_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/ref.mtx"
+path_cell_types <- "references/ptr_tenx_batch1_rs17_curated.csv"
+path_umap_gene_expression <- "references/projection.csv"
+
+# load data
+barcodes <- path_barcodes %>% read.table(header = FALSE)
+snv_loci <- path_snv_loci %>% read.table(header = FALSE)
+alt_mtx <- path_alt_mtx %>% readMM # %>% as.matrix %>% as.data.frame
+ref_mtx <- path_ref_mtx %>% readMM # %>% as.matrix %>% as.data.frame
+colnames(alt_mtx) <- barcodes$V1
+colnames(ref_mtx) <- barcodes$V1
+row.names(alt_mtx) <- snv_loci$V1
+row.names(ref_mtx) <- snv_loci$V1
+cell_types <- read.csv(path_cell_types, header = TRUE)
+rownames(cell_types) <- cell_types$Barcode
+umap_gene_expression <- read.csv(path_umap_gene_expression, header = TRUE)
+rownames(umap_gene_expression) <- umap_gene_expression$Barcode
+```
+
+Process cell_types and umap_gene_expression data.frame
+```{R}
+# gene expression cluster colors
+color_ge <- c(
+    "3"="#E28413",
+    "4"="#F3EC5B",
+    "8"="#FF8F8F",
+    "6"="#6362A7",
+    "5"="#61C9A8",
+    "2"="#7A4A33",
+    "1"="#1F77B4",
+    "7"="#FF0000",
+    "9"="whitesmoke",
+    "10"="whitesmoke",
+    "11"="whitesmoke"
+)
+# snv cluster colors
+color_snv <- c(
+    "1" = "#197D95",
+    "2" = "#4DBF92",
+    "3" = "#6362A7",
+    "4" = "#06185B",
+    "5" = "#72E993",
+    "6" = "#DEF5E5",
+    "7" = "#6A0B8C",
+    "8" = "#3C91E6",
+    "9" = "#F4A261",
+    "10" = "#E76F51",
+    "11" = "#264653",
+    "12" = "#9C89B8",
+    "13" = "#F6BD60",
+    "14" = "#84A59D",
+    "15" = "#F28482"
+)
+
+# update cell_types$Color
+cell_types$Color <- color_ge[as.character(cell_types$Cluster)] %>% unlist
+
+# udpate umap_gene_expression with color
+umap_gene_expression$Color_ge <- cell_types[umap_gene_expression$Barcode, "Color"]
+```
+
+# EDA on alternate fractions
+Calculate alternate fraction matrix
+```{R}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+alt_frac <- alt_mtx / (alt_mtx + ref_mtx)
+
+# Plot histogram
+svg("outputs/notebooks/UMAP-show-scSNV/alt_frac_hist.svg", width = 7, height = 7)
+alt_frac[!is.na(alt_frac)] %>% unlist %>%
+    hist(
+        main = "Alternate fraction\nAll cells; All loci\nExcluded loci with 0 reads",
+        xlab = "Alternate fraction",
+        ylab = "# observations at loci-cell",
+        breaks = 100
+    )
+dev.off()
+```
+
+Descriptive statistics
+```{R}
+t_alt_frac <- t(alt_frac) # rownames = cells, colnames = loci
+# calculate variance at each locus while ignoring NAs
+locus_var <- apply(t_alt_frac, 2, function(x) {
+    if (length(x[!is.na(x)]) > 0) {
+        return(var(x, na.rm = TRUE))
+    } else {
+        return(NA)
+    }
+})
+# calculate mean at each locus while ignoring NAs
+locus_mean <- apply(t_alt_frac, 2, function(x) {
+    if (length(x[!is.na(x)]) > 0) {
+        return(mean(x, na.rm = TRUE))
+    } else {
+        return(NA)
+    }
+})
+# calculate number of cells at each locus while ignoring NAs
+locus_n_cells <- apply(t_alt_frac, 2, function(x) {
+    if (length(x[!is.na(x)]) > 0) {
+        return(length(x[!is.na(x)]))
+    } else {
+        return(NA)
+    }
+})
+# plot scatter plot of locus variance v.s. locus n_cells 
+# with dot size = locus mean
+svg("outputs/notebooks/UMAP-show-scSNV/locus_variance~n_cells.svg",
+    width = 7,
+    height = 7,
+    bg = "transparent"
+)
+plot(
+    x = locus_n_cells,
+    y = locus_var,
+    cex = 0.6 * locus_mean,
+    main = sprintf(
+        "At %s locus expressed by at least 1 cell\nsize=mean(alt_frac)",
+        length(locus_var[!is.na(locus_var)])
+    ),
+    xlab = "Number of cells at locus",
+    ylab = "Variance of (alternate fractions) at locus"
+)
+dev.off()
+svg(
+    "outputs/notebooks/UMAP-show-scSNV/locus_variance~mean.svg",
+    width = 7,
+    height = 7,
+    bg = "transparent"
+)
+plot(
+    x = locus_mean,
+    y = locus_var,
+    cex = 0.1 * log10(locus_n_cells),
+    main = sprintf(
+        "At %s locus expressed by at least 1 cell\nsize=log10(n_cells)",
+        length(locus_var[!is.na(locus_var)])
+    ),
+    xlab = "Mean alternate fraction at locus",
+    ylab = "Variance of (alternate fractions) at locus"
+)
+dev.off()
+```
+
+Plot histogram of alternate fraction for loci with high variance
+```{R}
+locus_stats <- data.frame(
+    locus_var = locus_var,
+    locus_mean = locus_mean,
+    locus_n_cells = locus_n_cells
+)
+# loci with top 10 highest variance & reasonable n_cells
+n_cells_cutoff <- 500
+for (i in 1:10) {
+    locus <- locus_stats %>% 
+        subset(locus_n_cells > n_cells_cutoff) %>% 
+        arrange(desc(locus_var)) %>%
+        slice(i) %>% 
+        rownames
+    svg(
+        sprintf(
+            "outputs/notebooks/UMAP-show-scSNV/alt_frac_hist_%s.svg",
+            locus
+        ),
+        width = 7,
+        height = 7,
+        bg = "transparent"
+    )
+    alt_frac_locus <- t_alt_frac[, locus] %>% 
+        unlist %>%
+        hist(
+            main = sprintf(
+                "Alternate fraction at locus %s\n%s cells; variance=%s",
+                locus,
+                sum(!is.na(t_alt_frac[, locus])),
+                locus_stats[locus, "locus_var"]
+            ),
+            xlab = "Alternate fraction",
+            ylab = "Observed in N cells",
+            breaks = 100
+        )
+    dev.off()
+}
+```
+
+Plot histogram of alternate fraction for loci with high cell counts
+```{R}
+locus_stats <- data.frame(
+    locus_var = locus_var,
+    locus_mean = locus_mean,
+    locus_n_cells = locus_n_cells
+)
+# loci with top 10 highest n_cells & reasonable variance
+for (i in 1:10) {
+    locus <- locus_stats %>% 
+        arrange(desc(locus_n_cells)) %>%
+        slice(i) %>% 
+        rownames
+    svg(
+        sprintf(
+            "outputs/notebooks/UMAP-show-scSNV/alt_frac_hist_%s.svg",
+            locus
+        ),
+        width = 7,
+        height = 7,
+        bg = "transparent"
+    )
+    alt_frac_locus <- t_alt_frac[, locus] %>% 
+        unlist %>%
+        hist(
+            main = sprintf(
+                "Alternate fraction at locus %s\n%s cells; variance=%s",
+                locus,
+                sum(!is.na(t_alt_frac[, locus])),
+                locus_stats[locus, "locus_var"]
+            ),
+            xlab = "Alternate fraction",
+            ylab = "Observed in N cells",
+            breaks = 100
+        )
+    dev.off()
+}
+```
+
+# Run UMAP-PCA on alternate fraction matrix
+```{R}
+# pre-process the matrix
+t_alt_frac[is.na(t_alt_frac)] <- 0; dim(t_alt_frac) # fill NaNs with 0
+t_alt_frac <- t_alt_frac[, colSums(t_alt_frac) > 0]; dim(t_alt_frac) # remove loci with all 0s
+set.seed(42)
+pca_result <- irlba::prcomp_irlba(
+    t_alt_frac,
+    n = 30,
+    center = TRUE,
+    scale. = FALSE
+)
+pca_projection <- pca_result$x
+```
+
+UMAP on PCA projection
+```{R}
+n_neighbors <- 20
+min_dist <- 0.1
+metric <- "euclidean"
+seed <- 42
+umap_snv <- uwot::umap(
+    pca_projection,
+    n_neighbors = n_neighbors,
+    min_dist = min_dist,
+    spread = 1,
+    metric = metric,
+    n_components = 2,
+    seed = seed,
+    verbose = TRUE
+)
+umap_snv <- as.data.frame(umap_snv)
+rownames(umap_snv) <- rownames(t_alt_frac)
+colnames(umap_snv) <- c("UMAP.1", "UMAP.2")
+```
+
+Plot UMAP
+```{R}
+umap_snv_subset <- umap_snv[cell_types$Barcode, ]
+umap_snv_subset$Color_ge <- cell_types[rownames(umap_snv_subset), "Color"]
+svg(
+    "outputs/notebooks/UMAP-show-scSNV/SNV-UMAP_Tung-color.svg",
+    width = 7,
+    height = 7,
+    bg = "white"
+)
+plot(
+    x=umap_snv_subset[, "UMAP.1"],
+    y=umap_snv_subset[, "UMAP.2"],
+    col=umap_snv_subset$Color_ge,
+    pch=19,
+    cex=0.5,
+    main="UMAP of SNV data\ncolored by Tung Fig.1 cell type\nPCA-scaled=F",
+    xlab="UMAP1",
+    ylab="UMAP2"
+)
+dev.off()
+```
+
+Perform k-means clustering based on PCA projection
+```{R}
+# set k-means parameters
+set.seed(42)
+k <- 10
+nstart <- 25
+kmeans_res <- kmeans(
+    pca_projection,
+    centers = k,
+    nstart = nstart
+)
+# re-label clusters based on sizes
+sizes <- table(kmeans_res$cluster)
+new_labels <- as.numeric(
+    factor(
+        kmeans_res$cluster,
+        levels = names(sort(sizes, decreasing = TRUE))
+    )
+)
+snv_kmeans <- data.frame(
+    "Barcode" = barcodes[,1],
+    "Cluster" = new_labels
+)
+snv_kmeans$Color <- color_snv[as.character(new_labels)]
+rownames(snv_kmeans) <- snv_kmeans$Barcode
+
+# added color to umap_snv
+umap_snv$Color_snv <- snv_kmeans[rownames(umap_snv), "Color"]
+# plot UMAP
+svg(
+    "outputs/notebooks/UMAP-show-scSNV/SNV-UMAP_SNV-kmeans.svg",
+    width = 7,
+    height = 7,
+    bg = "white"
+)
+plot(
+    x = umap_snv[, "UMAP.1"],
+    y = umap_snv[, "UMAP.2"],
+    col = umap_snv[, "Color_snv"],
+    pch = 19,
+    cex = 0.5,
+    main = "UMAP of SNV data\ncolored by k-means clustering\nPCA-scaled=F",
+    xlab = "UMAP1",
+    ylab = "UMAP2"
+)
+dev.off()
+```
+
+Plot original UMAP colored by k-means clustering
+```{R}
+# plot UMAP
+svg(
+    "outputs/notebooks/UMAP-show-scSNV/GE-UMAP_SNV-kmeans.svg",
+    width = 7,
+    height = 7,
+    bg = "white"
+)
+umap_gene_expression$Color_snv <- snv_kmeans[umap_gene_expression$Barcode, "Color"]
+plot(
+    x = umap_gene_expression[,"UMAP.1"],
+    y = umap_gene_expression[,"UMAP.2"],
+    col = umap_gene_expression$Color_snv,
+    pch = 19,
+    cex = 0.5,
+    main = "UMAP of gene expression\ncolored by SNV k-means clusters",
+    xlab = "UMAP1",
+    ylab = "UMAP2"
+)
+dev.off()
+```
+
+Plot original UMAP colored by Tung Fig. 1 clustering
+```{R}
+# plot UMAP
+svg(
+    "outputs/notebooks/UMAP-show-scSNV/GE-UMAP_Tung-color.svg",
+    width = 7,
+    height = 7,
+    bg = "white"
+)
+plot(
+    x = umap_gene_expression[,"UMAP.1"],
+    y = umap_gene_expression[,"UMAP.2"],
+    col = umap_gene_expression$Color_ge,
+    pch = 19,
+    cex = 0.5,
+    main = "UMAP of gene expression\ncolored by SNV k-means clusters",
+    xlab = "UMAP1",
+    ylab = "UMAP2"
+)
+dev.off()
+```
