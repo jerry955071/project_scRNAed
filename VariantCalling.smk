@@ -28,7 +28,7 @@ def get_ref_by_sample(wildcards):
     species = query(config["samples"], "name", wildcards.sample)["species"]
     return query(config["references"], "species", species)["assembly"]
 
-# call_chromosomes_vcf_by_sample: call for vcf files per chromosome (used in bcftools_merge rule)
+# call_chromosomes_vcf_by_sample: call for vcf files per chromosome (used in bcftools_concat rule)
 def call_chromosomes_vcf_gz_by_sample(wildcards):
     species = query(config["samples"], "name", wildcards.sample)["species"]
     chromosomes = query(config["references"], "species", species)["chromosomes"]
@@ -55,6 +55,7 @@ rule freebayes_by_chromosome:
             chiaenu/freebayes:1.3.6-1 \
                 freebayes \
                     -f {input.reference_fasta} \
+                    -r {wildcards.chromosome} \
                     -iXu \
                     -C 2 \
                     -q 20 \
@@ -89,26 +90,24 @@ rule bgzip:
         """
 
 # 3. Merging vcf files (using gzipped vcf files)
-rule bcftools_merge:
+rule bcftools_concat:
     input:
         call_chromosomes_vcf_gz_by_sample
     output:
-        vcf="outputs/VariantCalling/bcftools_merge/{sample}.vcf"
+        vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf"
     log:
-        "logs/VariantCalling/bcftools_merge/{sample}.log"
+        "logs/VariantCalling/bcftools_concat/{sample}.log"
     shell:
         """
-        # merge vcf files
+        # concat vcf files
         docker run \
             {docker_mount} \
             -u $(id -u) \
             --rm \
             staphb/bcftools:1.21 \
-                bcftools merge \
+                bcftools concat \
                     -O v \
                     -o {output.vcf} \
-                    --no-index \
-                    --force-samples \
                     {input} \
             1> {log} \
             2> {log}
@@ -133,7 +132,7 @@ rule vartrix:
         vartrix_exec="src/vartrix/vartrix_linux",
         bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam",
         barcodes="outputs/Remapping/renamer/{sample}/barcodes.tsv",
-        vcf="outputs/VariantCalling/bcftools_merge/{sample}.vcf",
+        vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf",
         fasta=get_ref_by_sample
     output:
         ref_matrix="outputs/VariantCalling/vartrix/{sample}/ref.mtx",
@@ -161,7 +160,7 @@ rule vartrix:
 # ==== vawk parse vcf file for downstream analysis =====
 rule vawk_parse_vcf:
     input:
-        vcf="outputs/VariantCalling/bcftools_merge/{sample}.vcf"
+        vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf"
     output:
         vcf_parsed="outputs/VariantCalling/vawk/{sample}.snv.loci.txt"
     log:
@@ -178,4 +177,45 @@ rule vawk_parse_vcf:
                     2> {log}
 
         sed -i 's/\s/:/g' {output.vcf_parsed}
+        """
+
+# ==== vawk parse vcf file for downstream analysis =====
+rule vawk_parse_vcf_to_GATK_list:
+    input:
+        vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf"
+    output:
+        vcf_parsed="outputs/VariantCalling/vawk/{sample}.snv.loci.list"
+    log:
+        "logs/VariantCalling/vawk-to-list/{sample}.log"
+    shell:
+        """
+        docker run \
+            {docker_mount} \
+            -u $(id -u) \
+            --rm \
+            chiaenu/vawk:0.0.2 \
+                vawk '{{print $1":"$2"-"$2}}' {input.vcf} \
+                    1> {output.vcf_parsed} \
+                    2> {log}
+        
+        """
+
+# ==== vawk parse vcf file into BED format =====
+rule vawk_parse_vcf_to_bed:
+    input:
+        vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf"
+    output:
+        vcf_parsed="outputs/VariantCalling/vawk/{sample}.snv.loci.bed"
+    log:
+        "logs/VariantCalling/vawk-to-bed/{sample}.log"
+    shell:
+        """
+        docker run \
+            {docker_mount} \
+            -u $(id -u) \
+            --rm \
+            chiaenu/vawk:0.0.2 \
+                vawk '{{print $1,$2,$2}}' {input.vcf} \
+                    1> {output.vcf_parsed} \
+                    2> {log}
         """
