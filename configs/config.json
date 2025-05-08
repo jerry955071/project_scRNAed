@@ -36,6 +36,433 @@
             ]
         }
     ],
+    "samples-lcm": [
+        {
+            "name": "fiber-rep1",
+            "celltype": "fiber",
+            "species": "ptr",
+            "accession": "SRR15142080",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142080_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142080_2.fastq.gz"
+        },
+        {
+            "name": "fiber-rep2",
+            "celltype": "fiber",
+            "species": "ptr",
+            "accession": "SRR15142081",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142081_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142081_2.fastq.gz"
+        },
+        {
+            "name": "fiber-rep3",
+            "celltype": "fiber",
+            "species": "ptr",
+            "accession": "SRR15142082",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142082_1.fastq.gz",
+            "fastq_r2":"rawdata/LCM-seq/SRR15142082_2.fastq.gz"
+        },
+        {
+            "name": "vessel-rep1",
+            "celltype": "vessel",
+            "species": "ptr",
+            "accession": "SRR15142083",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142083_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142083_2.fastq.gz"
+        },
+        {
+            "name": "vessel-rep2",
+            "celltype": "vessel",
+            "species": "ptr",
+            "accession": "SRR15142084",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142084_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142084_2.fastq.gz"
+        },
+        {
+            "name": "vessel-rep3",
+            "celltype": "vessel",
+            "species": "ptr",
+            "accession": "SRR15142085",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142085_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142085_2.fastq.gz"
+        },
+        {
+            "name": "ray-rep1",
+            "celltype": "ray",
+            "species": "ptr",
+            "accession": "SRR15142086",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142086_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142086_2.fastq.gz"
+        },
+        {
+            "name": "ray-rep2",
+            "celltype": "ray",
+            "species": "ptr",
+            "accession": "SRR15142087",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142087_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142087_2.fastq.gz"
+        },
+        {
+            "name": "ray-rep3",
+            "celltype": "ray",
+            "species": "ptr",
+            "accession": "SRR15142088",
+            "fastq_r1": "rawdata/LCM-seq/SRR15142088_1.fastq.gz",
+            "fastq_r2": "rawdata/LCM-seq/SRR15142088_2.fastq.gz"
+        }
+    ],
+    "samples-dna": [
+        {
+            "name": "ptr-dap0001-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0001-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0002-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0002-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0003-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0003-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0011-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0011-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0012-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0012-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0013-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0013-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0031-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0031-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0032-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0032-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0033-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0033-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0041-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0041-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0042-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0042-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0043-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0043-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0051-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0051-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0052-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0052-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0053-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0053-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0061-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0061-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0062-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0062-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0063-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0063-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0071-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0071-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0072-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0072-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0073-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0073-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0081-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0081-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0082-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0082-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0083-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0083-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0091-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0091-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0092-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0092-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0093-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0093-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0101-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0101-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0102-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0102-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0103-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0103-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0111-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0111-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0112-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0112-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0113-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0113-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0131-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0131-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0132-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0132-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0133-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0133-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0141-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0141-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0142-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0142-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0143-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0143-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0151-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0151-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0152-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0152-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0153-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0153-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0161-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0161-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0162-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0162-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0163-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0163-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0181-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0181-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0182-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0182-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-dap0183-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-dap0183-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-SAMN04934395-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-SAMN04934395-xd.sorted.bam"
+            ]
+        },
+        {
+            "name": "ptr-SAMN04934397-xd",
+            "species": "ptr",
+            "bam_path": [
+                "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/ptr-SAMN04934397-xd.sorted.bam"
+            ]
+        }
+    ]
+    ,
     "references": [
         {
             "species": "ptr",
