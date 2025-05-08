@@ -6,3 +6,4 @@ outputs/*
 nohup-out/*
 logs/*
 .snakemake
+rawdata/*
