@@ -35,7 +35,7 @@ def set_sample_names_param(wildcards):
 rule CellRanger_count:
     threads: 8
     resources:
-        mem_gb=100
+        mem_gb=16
     input:
         CellRanger="src/cellranger-9.0.1/cellranger",
         transcriptome=lambda wildcards: 
