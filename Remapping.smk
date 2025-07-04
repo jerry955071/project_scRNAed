@@ -132,24 +132,25 @@ rule samtools_sort:
         """
 
 # ================== index BAM with samtools ==================
-rule samtools_index:
-    threads: 24
-    input:
-        sorted_bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam"
-    output:
-        index="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam.bai"
-    log:
-        "logs/Remapping/samtools-index/{sample}.log"
-    shell:
-        """
-        docker run \
-            {docker_mount} \
-            -u $(id -u) \
-            --rm \
-            biocontainers/samtools:v1.9-4-deb_cv1 \
-            samtools index \
-                -@ {threads} \
-                {input.sorted_bam} \
-                1> {log} \
-                2> {log}
-        """
+# NOTE: replaced by the all purpose rule `samtools_index_any` in Snakefile
+# rule samtools_index:
+#     threads: 24
+#     input:
+#         sorted_bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam"
+#     output:
+#         index="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam.bai"
+#     log:
+#         "logs/Remapping/samtools-index/{sample}.log"
+#     shell:
+#         """
+#         docker run \
+#             {docker_mount} \
+#             -u $(id -u) \
+#             --rm \
+#             biocontainers/samtools:v1.9-4-deb_cv1 \
+#             samtools index \
+#                 -@ {threads} \
+#                 {input.sorted_bam} \
+#                 1> {log} \
+#                 2> {log}
+#         """
