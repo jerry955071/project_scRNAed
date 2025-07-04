@@ -37,7 +37,22 @@ def get_fastq_by_sample(wildcards):
 # 3. Annotate RNA.tsv with DNA.tsv
 # 
 # We only run step 1 because we've done variant calling with DNA data
-
+rule all:
+    input:
+        expand(
+            "outputs/LCM-RNA-editing/subset-reditable/{sample}-subset.tsv",
+            sample=[
+                "fiber-rep1",
+                "fiber-rep2",
+                "fiber-rep3",
+                "vessel-rep1",
+                "vessel-rep2",
+                "vessel-rep3",
+                "ray-rep1",
+                "ray-rep2",
+                "ray-rep3"
+            ]
+        )
 
 # ==== 0. Pre-process FASTQ files ====
 rule fastp:
@@ -125,6 +140,103 @@ rule star_align:
                 --outSAMmultNmax 1 \
             > {log} 2>&1
         """
+
+rule star_align_to_fastq:
+    """
+    Convert STAR output BAM to FASTQ files for remapping with minimap2.
+    This is necessary because minimap2 does not support BAM input directly.
+    """
+    threads: 1
+    input:
+        bam="outputs/LCM-RNA-editing/star/{sample}/Aligned.sortedByCoord.out.bam"
+    output:
+        qsort_bam="outputs/LCM-RNA-editing/minimap_remap/{sample}/star-mapped.qsort.bam",
+        r1="outputs/LCM-RNA-editing/minimap_remap/{sample}/star-mapped.r1.fq",
+        r2="outputs/LCM-RNA-editing/minimap_remap/{sample}/star-mapped.r2.fq"
+    log:
+        "logs/LCM-RNA-editing/star-align-to-fastq/{sample}.log"
+    shell:
+        """
+        docker run {docker_mount} -u $(id -u) --rm biocontainers/samtools:v1.9-4-deb_cv1 \
+            samtools sort \
+            -n \
+            -o {output.qsort_bam} \
+            {input.bam} \
+            > {log} 2>&1
+
+        docker run {docker_mount} -u $(id -u) --rm staphb/bedtools:2.31.1 \
+            bedtools bamtofastq \
+                -i {output.qsort_bam} \
+                -fq {output.r1} \
+                -fq2 {output.r2} \
+            >> {log} 2>&1
+        """
+
+rule star_align_to_1_fastq:
+    """
+    Convert STAR output BAM to FASTQ files for remapping with minimap2.
+    This is necessary because minimap2 does not support BAM input directly.
+    """
+    threads: 1
+    input:
+        bam="outputs/LCM-RNA-editing/star/{sample}/Aligned.sortedByCoord.out.bam"
+    output:
+        fastq="outputs/LCM-RNA-editing/minimap_remap/{sample}/star-mapped.fq",
+    log:
+        "logs/LCM-RNA-editing/star-align-to-1-fastq/{sample}.log"
+    shell:
+        """
+        docker run {docker_mount} -u $(id -u) --rm biocontainers/samtools:v1.9-4-deb_cv1 \
+            samtools fastq \
+            {input.bam} \
+            1> {output.fastq} \
+            2> {log}
+        """
+
+# References:
+# https://lh3.github.io/2025/04/18/short-rna-seq-read-alignment-with-minimap2
+# https://lh3.github.io/minimap2/minimap2.html
+rule minimap_remap:
+    threads: 24
+    input:
+        assembly="references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa",
+        fq="outputs/LCM-RNA-editing/minimap_remap/{sample}/star-mapped.fq",
+    output:
+        remapped_sam="outputs/LCM-RNA-editing/minimap_remap/{sample}/remapped.sam",
+        remapped_sorted_bam="outputs/LCM-RNA-editing/minimap_remap/{sample}/remapped.sorted.bam",
+        remaaped_sorted_bam_bai="outputs/LCM-RNA-editing/minimap_remap/{sample}/remapped.sorted.bam.bai"
+    log:
+        minimap2="logs/LCM-RNA-editing/minimap_remap/{sample}-minimap2.log",
+        samtools_sort="logs/LCM-RNA-editing/minimap_remap/{sample}-samtools-sort.log",
+        samtools_index="logs/LCM-RNA-editing/minimap_remap/{sample}-samtools-index.log"
+    shell:
+        """
+        # triggers rerun
+        docker run {docker_mount} -u $(id -u) --rm staphb/minimap2:2.29 \
+            minimap2 \
+                -ax splice:sr \
+                -t {threads} \
+                {input.assembly} \
+                {input.fq} \
+                1> {output.remapped_sam} \
+                2> {log.minimap2}
+        
+        docker run {docker_mount} -u $(id -u) --rm biocontainers/samtools:v1.9-4-deb_cv1 \
+            samtools sort \
+                -@ {threads} \
+                -o {output.remapped_sorted_bam} \
+                {output.remapped_sam} \
+                1> {log.samtools_sort} \
+                2> {log.samtools_sort}
+        
+        docker run {docker_mount} -u $(id -u) --rm biocontainers/samtools:v1.9-4-deb_cv1 \
+            samtools index \
+                -@ {threads} \
+                {output.remapped_sorted_bam} \
+                1> {log.samtools_index} \
+                2> {log.samtools_index}
+        """
+
         
 rule samtools_index_lcm:
     threads: 8
@@ -149,10 +261,10 @@ rule samtools_index_lcm:
 rule reditools_rna:
     threads: 16
     input:
-        bam="outputs/LCM-RNA-editing/star/{sample}/Aligned.sortedByCoord.out.bam",
-        bai="outputs/LCM-RNA-editing/star/{sample}/Aligned.sortedByCoord.out.bam.bai",
-        assembly="references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa",
-        bed_file="outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.bed"
+        bam="outputs/LCM-RNA-editing/minimap_remap/{sample}/remapped.sorted.bam",
+        bai="outputs/LCM-RNA-editing/minimap_remap/{sample}/remapped.sorted.bam.bai",
+        assembly="references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa"
+        # bed_file="outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.bed"
     output:
         "outputs/LCM-RNA-editing/reditools-rna/{sample}.tsv"
     log:
@@ -165,13 +277,48 @@ rule reditools_rna:
                     --output-file {output} \
                     --strand 1 \
                     --verbose \
-                    --bed_file {input.bed_file} \
                     --variants all \
                     --threads {threads} \
                     {input.bam} \
             > {log} 2>&1
         """
 
+# Subset the RNA editing sites to only those that are variable in the scRNA-seq data
+rule bgzip_tabix:
+    threads: 1
+    input:
+        "outputs/LCM-RNA-editing/reditools-rna/{sample}.tsv"
+    output:
+        gz="outputs/LCM-RNA-editing/bgzip-tabix/{sample}.tsv.gz",
+        tbi="outputs/LCM-RNA-editing/bgzip-tabix/{sample}.tsv.gz.tbi"
+    log:
+        "logs/LCM-RNA-editing/bgzip-tabix/{sample}-subset.log"
+    shell:
+        """
+        docker run {docker_mount} --rm -u $(id -u) staphb/htslib:1.21 \
+            scripts/bgzip-tabix.sh \
+                {input} \
+                {output.gz} \
+                {output.tbi} \
+                > {log} 2>&1
+        """
+
+rule subset_reditable:
+    threads: 1
+    input:
+        reditable="outputs/LCM-RNA-editing/bgzip-tabix/{sample}.tsv.gz",
+        bed_file="outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.bed"
+    output:
+        chrom_pos=temp("outputs/LCM-RNA-editing/subset-reditable/{sample}-chrom-pos.tsv"),
+        reditable_subset="outputs/LCM-RNA-editing/subset-reditable/{sample}-subset.tsv"
+    log:
+        "logs/LCM-RNA-editing/subset-reditable/{sample}-subset.log"
+    shell:
+        """
+        awk 'BEGIN{{OFS="\t"}} {{print $1, $2}}' {input.bed_file} 1> {output.chrom_pos} 2> {log}
+        docker run {docker_mount} --rm -u $(id -u) staphb/htslib:1.21 \
+            tabix -R {output.chrom_pos} {input.reditable} 1> {output.reditable_subset} 2>> {log}
+        """
 # ==== 4. REDItools on DNA (on scRNA-variable sites) ====
 # NOTE: Skipped (see above for explanation)
 
