@@ -18,11 +18,6 @@ for volume in config["volumes"]:
         docker_mount += "-w %s " % volume["container"]
 
 # ================= Custom functions =================
-# query: query from list of dict by key-value pair
-from typing import List
-def query(d:List[dict], k:str, v:str) -> dict:
-    return [x for x in d if x[k] == v][0]
-
 # get_ref_by_sample: get reference genome for sample (used in minimap2 rule)
 def get_ref_by_sample(wildcards):
     species = query(config["samples"], "name", wildcards.sample)["species"]
@@ -42,6 +37,7 @@ def call_chromosomes_vcf_gz_by_sample(wildcards):
 rule freebayes_by_chromosome:
     input:
         minitagged_sorted_bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam",
+        minitagged_sorted_bam_bai="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam.bai",
         reference_fasta=get_ref_by_sample
     output:
         vcf="outputs/VariantCalling/freebayes/{sample}/{chromosome}.vcf"
@@ -69,14 +65,14 @@ rule freebayes_by_chromosome:
                     2> {log}
         """
 
-# 2. Compressing vcf files with bgzip (will create temporary .gz files)
+# # 2. Compressing vcf files with bgzip (will create temporary .gz files)
 rule bgzip:
     input:
-        "{file}"
+        "outputs/VariantCalling/freebayes/{sample}/{chrom}.vcf"
     output:
-        temp("{file}.gz")
+        "outputs/VariantCalling/freebayes/{sample}/{chrom}.vcf.gz"
     log:
-        "logs/gzip/{file}.log"
+        "logs/bgzip/VariantCalling/freebayes/{sample}/{chrom}.log"
     shell:
         """
         docker run \
@@ -100,15 +96,11 @@ rule bcftools_concat:
     shell:
         """
         # concat vcf files
-        docker run \
-            {docker_mount} \
-            -u $(id -u) \
-            --rm \
-            staphb/bcftools:1.21 \
-                bcftools concat \
-                    -O v \
-                    -o {output.vcf} \
-                    {input} \
+        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
+            bcftools concat \
+                -O v \
+                -o {output.vcf} \
+                {input} \
             1> {log} \
             2> {log}
         """
@@ -131,6 +123,7 @@ rule vartrix:
     input:
         vartrix_exec="src/vartrix/vartrix_linux",
         bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam",
+        bai="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam.bai",
         barcodes="outputs/Remapping/renamer/{sample}/barcodes.tsv",
         vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf",
         fasta=get_ref_by_sample
@@ -179,7 +172,7 @@ rule vawk_parse_vcf:
         sed -i 's/\s/:/g' {output.vcf_parsed}
         """
 
-# ==== vawk parse vcf file for downstream analysis =====
+# ==== vawk parse vcf file for GATK =====
 rule vawk_parse_vcf_to_GATK_list:
     input:
         vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf"
@@ -197,7 +190,6 @@ rule vawk_parse_vcf_to_GATK_list:
                 vawk '{{print $1":"$2"-"$2}}' {input.vcf} \
                     1> {output.vcf_parsed} \
                     2> {log}
-        
         """
 
 # ==== vawk parse vcf file into BED format =====
@@ -218,4 +210,44 @@ rule vawk_parse_vcf_to_bed:
                 vawk '{{print $1,$2,$2}}' {input.vcf} \
                     1> {output.vcf_parsed} \
                     2> {log}
+        """
+
+# ==== Get RNA variant sites per species ====
+# TODO: finish this rule
+rule bedtools_merge:
+    input:
+        bed=expand(
+            "outputs/VariantCalling/vawk/{sample}.snv.loci.bed",
+            sample=lambda wildcards: query_all(
+                d=config["samples"],
+                k="species",
+                v=wildcards.species,
+                k_out="name"
+            )
+        )
+    output:
+        tmp=temp("outputs/VariantCalling/{species}/snv.loci.bed-tmp"),
+        merged_bed="outputs/VariantCalling/{species}/snv.loci.bed",
+        merged_list="outputs/VariantCalling/{species}/snv.loci.list"
+    log:
+        "logs/VariantCalling/bedtools/merge/{species}.log"
+    shell:
+        """
+        # cat and sort bed records
+        cat {input.bed} \
+            | sort -k1,1 -k2,2n \
+            1> {output.tmp} \
+            2> {log}
+
+        # bedtools-merge
+        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
+            bcftools merge -i {output.tmp} \
+            1> {output.merged_bed} \
+            2>> {log}
+
+        # parse bed format into list format for GATK
+        cat {output_merged_bed} \
+            | awk '{{print $1":"$2"-"$3}}' \
+            1> {output.merged_list} \
+            2>> {log}
         """
