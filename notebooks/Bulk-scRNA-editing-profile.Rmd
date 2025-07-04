@@ -1,0 +1,191 @@
+---
+title: "Profiling bulk scRNA editing based on GATK genotyping results"
+author: "Chia-Chen Chu"
+date: '2025-05-20'
+output: html_document
+---
+
+Load packages
+```{r}
+library(magrittr)
+library(data.table)
+library(ggplot2)
+```
+
+
+```{r}
+# load GATK profiling results
+path_hom_ref <- "outputs/VariantCalling-DNA/gatk_joint/hom_ref.vcf"
+hom_ref <- fread(cmd=sprintf("grep -v '^##' %s", path_hom_ref))
+hom_ref[, POS := trimws(POS)]
+hom_ref[, RN := paste0(`#CHROM`, ":", POS)]
+
+# load REDItool 1 called bulk scRNA editing table
+path_bulk_snv_DnaRna_star <- "outputs/bulk-scRNA-editing/reditools1-star/ptr_tenx_batch1.txt"
+path_bulk_snv_DnaRna_mini <- "outputs/bulk-scRNA-editing/reditools1-minimap2/ptr_tenx_batch1.txt"
+bulk_snv_DnaRna_star <- fread(path_bulk_snv_DnaRna_star, header = TRUE, sep = "\t")
+bulk_snv_DnaRna_mini <- fread(path_bulk_snv_DnaRna_mini, header = TRUE, sep = "\t")
+bulk_snv_DnaRna_star[, RN := paste(Region, Position, sep = ":")]
+bulk_snv_DnaRna_mini[, RN := paste(Region, Position, sep = ":")]
+setkey(bulk_snv_DnaRna_star, RN)
+setkey(bulk_snv_DnaRna_mini, RN)
+
+# output directory
+path_output <- "outputs/notebooks/Bulk-scRNA-editing-profile"
+dir.create(path_output)
+```
+
+```{r}
+inter_mini_sc <- intersect(rownames(alt_frac), bulk_snv_DnaRna_mini$RN)
+coverage_vartrix <- rowSums(alt_mtx[inter_mini_sc,] + ref_mtx[inter_mini_sc,])
+data_mini_vartrix <- data.table(
+    x = coverage_vartrix,
+    y = bulk_snv_DnaRna_mini[inter_mini_sc, `Coverage-q30`]
+)
+```
+
+```{r}
+library(ggplot2)
+
+# Fit the linear model
+fit <- lm(y ~ x, data = data_mini_vartrix)
+
+# Extract regression formula as a string
+coeff <- coef(fit)
+eq_label <- sprintf("y = %.4f x + %.2f", coeff[2], coeff[1])
+
+# Plot
+p <- ggplot(data_mini_vartrix, aes(x = x, y = y)) +
+    geom_point(color = "black", alpha = 0.1, size = 0.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+    annotate(
+        "text",
+        x = 0,
+        y = 50000,
+        label = eq_label,
+        hjust = 0,
+        vjust = 1,
+        color = "red",
+        size = 3
+    ) +
+    scale_x_continuous(limits = c(0, 50000)) +
+    scale_y_continuous(limits = c(0, 50000)) +
+    labs(
+        x = "Vartrix read count (umi-aware)",
+        y = "REDItools counted coverage q30 (minimap2; umi-unaware)",
+        title = sprintf("Overlaps between Vatrix and minimap2: %s sites", length(inter_mini_sc))
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(),
+        plot.background = element_rect(fill = "white", color = NA)
+    )
+
+png("outputs/notebooks/Bulk-scRNA-editing-profile/coverage_vartrix_minimap2.png")
+print(p)
+dev.off()
+```
+
+```{r}
+inter_star_sc <- intersect(rownames(alt_frac), bulk_snv_DnaRna_star$RN)
+coverage_vartrix <- rowSums(alt_mtx[inter_star_sc,] + ref_mtx[inter_star_sc,])
+data_star_vartrix <- data.table(
+    x = coverage_vartrix,
+    y = bulk_snv_DnaRna_star[inter_star_sc, `Coverage-q30`]
+)
+```
+
+
+```{r}
+# Fit the linear model
+fit <- lm(y ~ x, data = data_star_vartrix)
+
+# Extract regression formula as a string
+coeff <- coef(fit)
+eq_label <- sprintf("y = %.4f x + %.2f", coeff[2], coeff[1])
+
+# Plot
+p <- ggplot(data_star_vartrix, aes(x = x, y = y)) +
+    geom_point(color = "black", alpha = 0.1, size = 0.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+    annotate(
+        "text",
+        x = 0,
+        y = 50000,
+        label = eq_label,
+        hjust = 0,
+        vjust = 1,
+        color = "red",
+        size = 3
+    ) +
+    scale_x_continuous(limits = c(0, 50000)) +
+    scale_y_continuous(limits = c(0, 50000)) +
+    labs(
+        x = "Vartrix read count (umi-aware)",
+        y = "REDItools counted coverage q30 (STAR; umi-aware)",
+        title = sprintf("Overlaps between Vatrix and STAR: %s sites", length(inter_star_sc))
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(),
+        plot.background = element_rect(fill = "white", color = NA)
+    )
+
+png("outputs/notebooks/Bulk-scRNA-editing-profile/coverage_vartrix_star.png")
+print(p)
+dev.off()
+```
+
+```{r}
+inter_mini_star <- intersect(bulk_snv_DnaRna_mini$RN, bulk_snv_DnaRna_star$RN)
+subtype_mini_star <- data.table(
+    minimap = bulk_snv_DnaRna_mini[inter_mini_star, AllSubs],
+    star = bulk_snv_DnaRna_star[inter_mini_star, AllSubs]
+)
+subtype_mini_star_altered <- subtype_mini_star[(minimap != "-") & (star != "-")]
+mean(subtype_mini_star_altered$minimap == subtype_mini_star_altered$star)
+```
+
+```{r}
+hom_ref_bulk_snv_DnaRna_star <- bulk_snv_DnaRna_star[hom_ref$RN, ]
+subtypes_DnaRna_star <- table(
+    hom_ref_bulk_snv_DnaRna_star[(Frequency > 0.1 & Frequency < 0.9) & `Coverage-q30` > 10, AllSubs]
+) %>% as.data.table
+
+svg("outputs/notebooks/Bulk-scRNA-editing-profile/subtypes_star.svg")
+ggplot(subtypes_DnaRna_star[N > 10,], aes(x = V1, y = N)) +
+    geom_bar(stat = "identity") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(
+        title = "Bulky-scRNA editing sites (STAR-aligned)\nAt R|R loci\n0.1 < ratio < 0.9; coverage-q30 > 10\nShow counts > 10",
+        x = "Type of editing ",
+        y = "Counts"
+    )
+dev.off()
+```
+
+```{r}
+hom_ref_bulk_snv_DnaRna_mini <- bulk_snv_DnaRna_mini[hom_ref$RN, ]
+print(cat("Missing sites:", is.na(hom_ref_bulk_snv_DnaRna_mini$Region) %>% sum))
+subtypes_DnaRna_mini <- table(
+    hom_ref_bulk_snv_DnaRna_mini[(Frequency > 0.1 & Frequency < 0.9) & `Coverage-q30` > 10, AllSubs]
+) %>% as.data.table
+
+svg("outputs/notebooks/Bulk-scRNA-editing-profile/subtypes_minimap2.svg")
+ggplot(subtypes_DnaRna_mini[N > 10,], aes(x = V1, y = N)) +
+    geom_bar(stat = "identity") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(
+        title = "Bulky-scRNA editing sites (minimap2-remapped)\nAt R|R loci\n0.1 < ratio < 0.9; coverage-q30 > 10nShow counts > 10",
+        x = "Type of editing ",
+        y = "Counts"
+    )
+dev.off()
+```
+
+
+

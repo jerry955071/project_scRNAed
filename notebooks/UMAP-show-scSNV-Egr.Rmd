@@ -3,7 +3,6 @@
 # working directory: snakemake main directory
 
 Load libraries
-
 ```{R}
 library(Seurat)
 library(Matrix)
@@ -14,106 +13,89 @@ library(data.table)
 library(dplyr)
 ```
 
-Load data
+Create output folder
+```{r}
+path_output <- "outputs/notebooks/UMAP-show-scSNV-Egr"
+dir.create(path_output)
+```
 
+Load RNA polymorphism data
 ```{R}
-# set paths
-path_barcodes <- "outputs/Remapping/renamer/ptr_tenx_batch1/barcodes.tsv"
-path_snv_loci <- "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.txt"
-path_alt_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/alt.mtx"
-path_ref_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/ref.mtx"
-path_cell_types <- "references/ptr_tenx_batch1_rs17_curated.csv"
-path_umap_gene_expression <- "references/projection.csv"
-# path_dna_snv <- "outputs/VariantCalling-DNA/vawk_filter_extract/Ptr.snv.loci.txt"
-path_hom_alt <- "outputs/VariantCalling-DNA/gatk_joint/hom_alt.vcf"
-path_hom_ref <- "outputs/VariantCalling-DNA/gatk_joint/hom_ref.vcf"
-path_hom_ref_unfiltered_tsv <- "outputs/notebooks/UMAP-show-scSNV/genotyping/low_high_confidence_hom_ref.tsv"
-path_het <- "outputs/VariantCalling-DNA/gatk_joint/het.vcf"
-path_snp <- "outputs/VariantCalling-DNA/gatk_joint/snp.vcf"
-# path_dna_snv <- "dna.snv.txt.tmp"
-path_sc_vcf <- "outputs/VariantCalling/bcftools_concat/ptr_tenx_batch1.vcf"
-path_lcm_editing <- list(
-    fiber_rep1 = "outputs/LCM-RNA-editing/subset-reditable/fiber-rep1-subset.tsv",
-    fiber_rep2 = "outputs/LCM-RNA-editing/subset-reditable/fiber-rep2-subset.tsv",
-    fiber_rep3 = "outputs/LCM-RNA-editing/subset-reditable/fiber-rep3-subset.tsv",
-    vessel_rep1 = "outputs/LCM-RNA-editing/subset-reditable/vessel-rep1-subset.tsv",
-    vessel_rep2 = "outputs/LCM-RNA-editing/subset-reditable/vessel-rep2-subset.tsv",
-    vessel_rep3 = "outputs/LCM-RNA-editing/subset-reditable/vessel-rep3-subset.tsv",
-    ray_rep1 = "outputs/LCM-RNA-editing/subset-reditable/ray-rep1-subset.tsv",
-    ray_rep2 = "outputs/LCM-RNA-editing/subset-reditable/ray-rep2-subset.tsv",
-    ray_rep3 = "outputs/LCM-RNA-editing/subset-reditable/ray-rep3-subset.tsv"
-)
+# paths
+path_barcodes <- "outputs/Remapping/renamer/egr_tenx_batch1/barcodes.tsv"
+path_snv_loci <- "outputs/VariantCalling/vawk/egr_tenx_batch1.snv.loci.txt"
+path_sc_vcf <- "outputs/VariantCalling/bcftools_concat/egr_tenx_batch1.vcf"
+path_alt_mtx <- "outputs/VariantCalling/vartrix/egr_tenx_batch1/alt.mtx"
+path_ref_mtx <- "outputs/VariantCalling/vartrix/egr_tenx_batch1/ref.mtx"
 
-# load data
+# load tables
 barcodes <- path_barcodes %>% read.table(header = FALSE)
 snv_loci <- path_snv_loci %>% read.table(header = FALSE)
+sc_vcf <- fread(cmd=sprintf("grep -v '^##' %s", path_sc_vcf)) %>% as.data.frame
+sc_vcf$POS %<>% trimws()
+rownames(sc_vcf) <- apply(
+  sc_vcf[, c("#CHROM", "POS")], 1,
+  function(x){paste(x[1], x[2], sep = ":")}
+)
+# load matrices
 alt_mtx <- path_alt_mtx %>% readMM # %>% as.matrix %>% as.data.frame
 ref_mtx <- path_ref_mtx %>% readMM # %>% as.matrix %>% as.data.frame
 colnames(alt_mtx) <- barcodes$V1
 colnames(ref_mtx) <- barcodes$V1
 row.names(alt_mtx) <- snv_loci$V1
 row.names(ref_mtx) <- snv_loci$V1
-cell_types <- read.csv(path_cell_types, header = TRUE)
-umap_gene_expression <- read.csv(path_umap_gene_expression, header = TRUE)
-rownames(cell_types) <- cell_types$Barcode
-rownames(umap_gene_expression) <- umap_gene_expression$Barcode
-# dna_snv <- read.table(path_dna_snv, header = TRUE)
+```
+```{r}
+# Calculate alternate fractions (this takes long)
+alt_frac <- alt_mtx / (alt_mtx + ref_mtx)
+t_alt_frac <- t(alt_frac) # rownames = cells, colnames = loci
+```
+
+Load Genotyping data
+```{R}
+# path
+path_hom_alt <- "outputs/VariantCalling-DNA/gatk_joint/egr/hom_alt.vcf"
+path_hom_ref <- "outputs/VariantCalling-DNA/gatk_joint/egr/hom_ref.vcf"
+path_het <- "outputs/VariantCalling-DNA/gatk_joint/egr/het.vcf"
+path_snp <- "outputs/VariantCalling-DNA/gatk_joint/egr/snp.vcf"
+
+# load
 hom_alt <- fread(cmd=sprintf("grep -v '^##' %s", path_hom_alt)) %>% as.data.frame
 hom_ref <- fread(cmd=sprintf("grep -v '^##' %s", path_hom_ref)) %>% as.data.frame
-hom_ref_unfiltered_tsv <- read.table(path_hom_ref_unfiltered_tsv, sep = "\t", header = TRUE)
 het <- fread(cmd=sprintf("grep -v '^##' %s", path_het)) %>% as.data.frame
 snp <- fread(cmd=sprintf("grep -v '^##' %s", path_snp)) %>% as.data.frame
 hom_alt$POS %<>% trimws()
 hom_ref$POS %<>% trimws()
 het$POS %<>% trimws()
 snp$POS %<>% trimws()
-rownames(hom_alt) <- apply(hom_alt[, c("#CHROM", "POS")], 1, function(x){paste(x[1], x[2], sep = ":")})
-rownames(hom_ref) <- apply(hom_ref[, c("#CHROM", "POS")], 1, function(x){paste(x[1], x[2], sep = ":")})
-rownames(het) <- apply(het[, c("#CHROM", "POS")], 1, function(x){paste(x[1], x[2], sep = ":")})
-rownames(snp) <- apply(snp[, c("#CHROM", "POS")], 1, function(x){paste(x[1], x[2], sep = ":")})
-# load scRNA editing sites
-sc_vcf <- fread(cmd=sprintf("grep -v '^##' %s", path_sc_vcf)) %>% as.data.frame
-sc_vcf$POS %<>% trimws()
-rownames(sc_vcf) <- apply(sc_vcf[, c("#CHROM", "POS")], 1, function(x){paste(x[1], x[2], sep = ":")})
-lcm_editing_tmp <- lapply(
-    path_lcm_editing,
-    function(x) {
-        foo <- read.table(x, sep = "\t", header = TRUE)
-        colnames(foo) <- c(
-            "Region",
-            "Position",
-            "Reference",
-            "Strand",
-            "Coverage-q30",
-            "MeanQ",
-            "BaseCount[A,C,G,T]",
-            "AllSubs",
-            "Frequency",
-            "gCoverage-q30",
-            "gMeanQ",
-            "gBaseCount[A,C,G,T]",
-            "gAllSubs",
-            "gFrequency"
-        )
-        foo$Position %<>% trimws()
-        rownames(foo) <- apply(
-            foo[, c("Region", "Position")],
-            1,
-            function(x){paste(x[1], x[2], sep = ":")}
-        )
-        return(foo)
-    }
+rownames(hom_alt) <- apply(
+  hom_alt[, c("#CHROM", "POS")], 1,
+  function(x){paste(x[1], x[2], sep = ":")}
 )
-lcm_editing_freq <- matrix(ncol=length(path_lcm_editing), nrow=nrow(alt_mtx)) %>% as.data.frame
-rownames(lcm_editing_freq) <- rownames(alt_mtx)
-colnames(lcm_editing_freq) <- names(path_lcm_editing)
-for (i in 1:length(path_lcm_editing)) {
-    df_tmp <- lcm_editing_tmp[[i]]
-    name_tmp <- names(path_lcm_editing)[i]
-    lcm_editing_freq[rownames(df_tmp), name_tmp] <- df_tmp$Frequency
-}
-lcm_editing_freq_filled <- lcm_editing_freq
-lcm_editing_freq_filled[is.na(lcm_editing_freq_filled)] <- 0
+rownames(hom_ref) <- apply(
+  hom_ref[, c("#CHROM", "POS")], 1,
+  function(x){paste(x[1], x[2], sep = ":")}
+)
+rownames(het) <- apply(
+  het[, c("#CHROM", "POS")], 1,
+  function(x){paste(x[1], x[2], sep = ":")}
+)
+rownames(snp) <- apply(
+  snp[, c("#CHROM", "POS")], 1,
+  function(x){paste(x[1], x[2], sep = ":")}
+)
+```
+
+Previous results (data outside of this pipeline)
+```{R}
+# path
+path_cell_types <- "references/seurat_four_trees_cell_identity.csv"
+
+# load data
+cell_types <- fread(path_cell_types, header = TRUE)
+cell_types <- cell_types[grep("egr_tenx_batch1", Barcode),] # extract only "egr_tenx_batch1" cells
+cell_types$Barcode %<>% sub(".*:", "", .) # remove strings prefixing barcode
+setkey(cell_types, Barcode) # set column `Barcode` as key
 ```
 
 Process cell_types and umap_gene_expression data.frame
@@ -130,7 +112,8 @@ color_ge <- c(
     "7"="#FF0000",
     "9"="whitesmoke",
     "10"="whitesmoke",
-    "11"="whitesmoke"
+    "11"="whitesmoke",
+    "12"="whitesmoke"
 )
 # snv cluster colors
 color_snv <- c(
@@ -151,25 +134,19 @@ color_snv <- c(
     "15" = "#F28482"
 )
 
-# update cell_types$Color and umap_gene_expression$Color
+# update cell_types$Color
 cell_types$Color <- color_ge[as.character(cell_types$Cluster)] %>% unlist
-umap_gene_expression$Color_ge <- cell_types[umap_gene_expression$Barcode, "Color"]
 ```
 
 # EDA on alternate fractions
-
 Calculate alternate fraction matrix
-
 ```{R}
 library(ggplot2)
 library(dplyr)
 library(tidyr)
 
-alt_frac <- alt_mtx / (alt_mtx + ref_mtx)
-t_alt_frac <- t(alt_frac) # rownames = cells, colnames = loci
-
 # Plot histogram
-svg("outputs/notebooks/UMAP-show-scSNV/alt_frac_hist.svg", width = 7, height = 7)
+svg("outputs/notebooks/UMAP-show-scSNV-Egr/alt_frac_hist.svg", width = 7, height = 7)
 alt_frac[!is.na(alt_frac)] %>% unlist %>%
     hist(
         main = "Alternate fraction\nAll cells; All loci\nExcluded loci with 0 reads",
@@ -181,9 +158,7 @@ dev.off()
 ```
 
 Descriptive statistics
-
 ```{R}
-t_alt_frac <- t(alt_frac) # rownames = cells, colnames = loci
 # calculate variance at each locus while ignoring NAs
 locus_var <- apply(t_alt_frac, 2, function(x) {
     if (length(x[!is.na(x)]) > 0) {
@@ -210,7 +185,7 @@ locus_n_cells <- apply(t_alt_frac, 2, function(x) {
 })
 # plot scatter plot of locus variance v.s. locus n_cells 
 # with dot size = locus mean
-svg("outputs/notebooks/UMAP-show-scSNV/locus_variance~n_cells.svg",
+svg("outputs/notebooks/UMAP-show-scSNV-Egr/locus_variance~n_cells.svg",
     width = 7,
     height = 7,
     bg = "transparent"
@@ -228,7 +203,7 @@ plot(
 )
 dev.off()
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/locus_variance~mean.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/locus_variance~mean.svg",
     width = 7,
     height = 7,
     bg = "transparent"
@@ -248,7 +223,6 @@ dev.off()
 ```
 
 Plot histogram of alternate fraction for loci with high variance
-
 ```{R}
 locus_stats <- data.frame(
     locus_var = locus_var,
@@ -265,7 +239,7 @@ for (i in 1:10) {
         rownames
     svg(
         sprintf(
-            "outputs/notebooks/UMAP-show-scSNV/alt_frac_hist_%s.svg",
+            "outputs/notebooks/UMAP-show-scSNV-Egr/alt_frac_hist_%s.svg",
             locus
         ),
         width = 7,
@@ -290,7 +264,6 @@ for (i in 1:10) {
 ```
 
 Plot histogram of alternate fraction for loci with high cell counts
-
 ```{R}
 locus_stats <- data.frame(
     locus_var = locus_var,
@@ -305,7 +278,7 @@ for (i in 1:10) {
         rownames
     svg(
         sprintf(
-            "outputs/notebooks/UMAP-show-scSNV/alt_frac_hist_%s.svg",
+            "outputs/notebooks/UMAP-show-scSNV-Egr/alt_frac_hist_%s.svg",
             locus
         ),
         width = 7,
@@ -347,7 +320,7 @@ write.csv(
     data.frame("Barcode" = rownames(t_alt_frac)),
     pca_projection
   ),
-  file = "outputs/notebooks/UMAP-show-scSNV/pca_projection_all_loci.csv",
+  file = "outputs/notebooks/UMAP-show-scSNV-Egr/pca_projection_all_loci.csv",
   quote = FALSE,
   row.names = FALSE
 )
@@ -355,7 +328,7 @@ write.csv(
 
 UMAP on PCA projection
 ```{R}
-n_neighbors <- 15
+n_neighbors <- 5
 min_dist <- 0.1
 metric <- "euclidean"
 seed <- 42
@@ -369,27 +342,34 @@ umap_snv <- uwot::umap(
     seed = seed,
     verbose = TRUE
 )
-umap_snv <- as.data.frame(umap_snv)
-rownames(umap_snv) <- rownames(t_alt_frac)
-colnames(umap_snv) <- c("UMAP.1", "UMAP.2")
-write.csv(umap_snv, "outputs/notebooks/UMAP-show-scSNV/snv-umap.csv")
+umap_snv <- as.data.table(umap_snv)
+setnames(umap_snv, "V1", "UMAP.1")
+setnames(umap_snv, "V2", "UMAP.2")
+umap_snv$Barcode <- rownames(t_alt_frac)
+umap_snv[,c("Barcode", "UMAP.1", "UMAP.2")] %>% write.csv(
+  "outputs/notebooks/UMAP-show-scSNV-Egr/snv-umap.csv",
+  quote = FALSE,
+  row.names = FALSE
+)
 ```
 
 Plot UMAP
 SNV UMAP colored by Gene expression clusters
 ```{R}
-umap_snv_subset <- umap_snv[cell_types$Barcode, ]
-umap_snv_subset$Color_ge <- cell_types[rownames(umap_snv_subset), "Color"]
+umap_snv <- fread("outputs/notebooks/UMAP-show-scSNV-Egr/snv-umap.csv")
+setkey(umap_snv, Barcode)
+umap_snv_subset <- umap_snv[intersect(umap_snv$Barcode, cell_types$Barcode), ]
+umap_snv_subset$Color_ge <- cell_types[umap_snv_subset$Barcode, "Color"]
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/SNV-UMAP_Tung-color.svg",
-    width = 7,
-    height = 7,
+    "outputs/notebooks/UMAP-show-scSNV-Egr/SNV-UMAP_Tung-color.svg",
+    width = 10,
+    height = 10,
     bg = "white"
 )
 plot(
-    x=umap_snv_subset[, "UMAP.1"],
-    y=umap_snv_subset[, "UMAP.2"],
-    col=umap_snv_subset$Color_ge,
+    x=umap_snv_subset[["UMAP.1"]],
+    y=umap_snv_subset[["UMAP.2"]],
+    col=umap_snv_subset[["Color_ge"]],
     pch=19,
     cex=0.5,
     main="UMAP of SNV data\ncolored by Tung Fig.1 cell type\nPCA-scaled=F",
@@ -424,12 +404,12 @@ snv_kmeans <- data.frame(
 )
 snv_kmeans$Color <- color_snv[as.character(new_labels)]
 rownames(snv_kmeans) <- snv_kmeans$Barcode
-write.csv(snv_kmeans, file = "outputs/notebooks/UMAP-show-scSNV/snv-cluster.csv")
+write.csv(snv_kmeans, file = "outputs/notebooks/UMAP-show-scSNV-Egr/snv-cluster.csv")
 # added color to umap_snv
 umap_snv$Color_snv <- snv_kmeans[rownames(umap_snv), "Color"]
 # plot UMAP
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/SNV-UMAP_SNV-kmeans.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/SNV-UMAP_SNV-kmeans.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -451,7 +431,7 @@ Plot original UMAP colored by k-means clustering
 ```{R}
 # plot UMAP
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/GE-UMAP_SNV-kmeans.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/GE-UMAP_SNV-kmeans.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -475,7 +455,7 @@ Plot original UMAP colored by Tung Fig. 1 clustering
 ```{R}
 # plot UMAP
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/GE-UMAP_Tung-color.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/GE-UMAP_Tung-color.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -513,7 +493,7 @@ write.csv(
     data.frame("Barcode" = rownames(t_alt_frac_homo)),
     pca_projection_homo
   ),
-  file = "outputs/notebooks/UMAP-show-scSNV/pca_projection_homo_loci.csv",
+  file = "outputs/notebooks/UMAP-show-scSNV-Egr/pca_projection_homo_loci.csv",
   quote = FALSE,
   row.names = FALSE
 )
@@ -535,26 +515,32 @@ umap_snv_homo <- uwot::umap(
     seed = seed,
     verbose = TRUE
 )
-umap_snv_homo <- as.data.frame(umap_snv_homo)
-rownames(umap_snv_homo) <- rownames(t_alt_frac_homo)
-colnames(umap_snv_homo) <- c("UMAP.1", "UMAP.2")
-write.csv(umap_snv_homo, "outputs/notebooks/UMAP-show-scSNV/snv-umap_homo.csv")
+umap_snv_homo <- as.data.table(umap_snv_homo)
+setnames(umap_snv_homo, "V1", "UMAP.1")
+setnames(umap_snv_homo, "V2", "UMAP.2")
+umap_snv_homo$Barcode <- rownames(t_alt_frac_homo)
+umap_snv_homo[,c("Barcode", "UMAP.1", "UMAP.2")] %>% write.csv(
+  "outputs/notebooks/UMAP-show-scSNV-Egr/snv-umap_homo.csv",
+  quote = FALSE,
+  row.names = FALSE
+)
+setkey(umap_snv_homo, Barcode)
 ```
 Plot UMAP
 SNV UMAP colored by Gene expression clusters
 ```{R}
-umap_snv_homo_subset <- umap_snv_homo[cell_types$Barcode, ]
-umap_snv_homo_subset$Color_ge <- cell_types[rownames(umap_snv_homo_subset), "Color"]
+umap_snv_homo_subset <- umap_snv_homo[intersect(umap_snv_homo$Barcode, cell_types$Barcode), ]
+umap_snv_homo_subset$Color_ge <- cell_types[umap_snv_homo_subset$Barcode, "Color"]
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/HOMO_SNV-UMAP_Tung-color.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/HOMO_SNV-UMAP_Tung-color.svg",
     width = 7,
     height = 7,
     bg = "white"
 )
 plot(
-    x=umap_snv_homo_subset[, "UMAP.1"],
-    y=umap_snv_homo_subset[, "UMAP.2"],
-    col=umap_snv_homo_subset$Color_ge,
+    x=umap_snv_homo_subset[["UMAP.1"]],
+    y=umap_snv_homo_subset[["UMAP.2"]],
+    col=umap_snv_homo_subset[["Color_ge"]],
     pch=19,
     cex=0.5,
     main="UMAP of SNV data (homo)\ncolored by Tung Fig.1 cell type\nPCA-scaled=F",
@@ -590,12 +576,12 @@ snv_kmeans <- data.frame(
 )
 snv_kmeans$Color <- color_snv[as.character(new_labels)]
 rownames(snv_kmeans) <- snv_kmeans$Barcode
-write.csv(snv_kmeans, file = "outputs/notebooks/UMAP-show-scSNV/snv-cluster.csv")
+write.csv(snv_kmeans, file = "outputs/notebooks/UMAP-show-scSNV-Egr/snv-cluster.csv")
 # added color to umap_snv
 umap_snv$Color_snv <- snv_kmeans[rownames(umap_snv), "Color"]
 # plot UMAP
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/SNV-UMAP_SNV-kmeans.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/SNV-UMAP_SNV-kmeans.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -618,7 +604,7 @@ Plot original UMAP colored by k-means clustering
 ```{R}
 # plot UMAP
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/GE-UMAP_SNV-kmeans.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/GE-UMAP_SNV-kmeans.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -642,7 +628,7 @@ Plot original UMAP colored by Tung Fig. 1 clustering
 ```{R}
 # plot UMAP
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/GE-UMAP_Tung-color.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/GE-UMAP_Tung-color.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -680,7 +666,7 @@ write.csv(
     data.frame("Barcode" = rownames(t_alt_frac_het)),
     pca_projection_het
   ),
-  file = "outputs/notebooks/UMAP-show-scSNV/pca_projection_het_loci.csv",
+  file = "outputs/notebooks/UMAP-show-scSNV-Egr/pca_projection_het_loci.csv",
   quote = FALSE,
   row.names = FALSE
 )
@@ -702,26 +688,32 @@ umap_snv_het <- uwot::umap(
     seed = seed,
     verbose = TRUE
 )
-umap_snv_het <- as.data.frame(umap_snv_het)
-rownames(umap_snv_het) <- rownames(t_alt_frac_het)
-colnames(umap_snv_het) <- c("UMAP.1", "UMAP.2")
-write.csv(umap_snv_het, "outputs/notebooks/UMAP-show-scSNV/snv-umap_snp.csv")
+umap_snv_het <- as.data.table(umap_snv_het)
+setnames(umap_snv_het, "V1", "UMAP.1")
+setnames(umap_snv_het, "V2", "UMAP.2")
+umap_snv_het$Barcode <- rownames(t_alt_frac_het)
+umap_snv_het[,c("Barcode", "UMAP.1", "UMAP.2")] %>% write.csv(
+  "outputs/notebooks/UMAP-show-scSNV-Egr/snv-umap_het.csv",
+  quote = FALSE,
+  row.names = FALSE
+)
+setkey(umap_snv_homo, Barcode)
 ```
 Plot UMAP
 SNV UMAP colored by Gene expression clusters
 ```{R}
-umap_snv_het_subset <- umap_snv_het[cell_types$Barcode, ]
-umap_snv_het_subset$Color_ge <- cell_types[rownames(umap_snv_het_subset), "Color"]
+umap_snv_het_subset <- umap_snv_het[intersect(cell_types$Barcode, umap_snv_het$Barcode), ]
+umap_snv_het_subset$Color_ge <- cell_types[umap_snv_het_subset$Barcode, "Color"]
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/HET_SNV-UMAP_Tung-color.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/HET_SNV-UMAP_Tung-color.svg",
     width = 7,
     height = 7,
     bg = "white"
 )
 plot(
-    x=umap_snv_het_subset[, "UMAP.1"],
-    y=umap_snv_het_subset[, "UMAP.2"],
-    col=umap_snv_het_subset$Color_ge,
+    x=umap_snv_het_subset[["UMAP.1"]],
+    y=umap_snv_het_subset[["UMAP.2"]],
+    col=umap_snv_het_subset[["Color_ge"]],
     pch=19,
     cex=0.5,
     main="UMAP of SNV data (het)\ncolored by Tung Fig.1 cell type\nPCA-scaled=F",
@@ -757,7 +749,7 @@ snp_filtered <- snp[loci_snp_filtered,]
 See GATK SNP sites that are identified as both SNP and heterozygous no-variant sites
 
 ```{R}
-svg("outputs/notebooks/UMAP-show-scSNV/GATK-SNP-type.svg")
+svg("outputs/notebooks/UMAP-show-scSNV-Egr/GATK-SNP-type.svg")
 table(apply(snp[,c("REF", "ALT")], 1, paste, collapse = "->")) %>%
     as.data.frame %>%
     subset(Freq > 50) %>%
@@ -772,7 +764,7 @@ table(apply(snp[,c("REF", "ALT")], 1, paste, collapse = "->")) %>%
     )
 dev.off()
 
-svg("outputs/notebooks/UMAP-show-scSNV/GATK-filtered-SNP-type_F_PASS=0.2.svg")
+svg("outputs/notebooks/UMAP-show-scSNV-Egr/GATK-filtered-SNP-type_F_PASS=0.2.svg")
 table(apply(snp_filtered[,c("REF", "ALT")], 1, paste, collapse = "->")) %>%
     as.data.frame %>%
     subset(Freq > 50) %>%
@@ -791,7 +783,7 @@ dev.off()
 See scRNA editing sites
 
 ```{R}
-svg("outputs/notebooks/UMAP-show-scSNV/scRNA-editing-type_F_PASS=0.2.svg")
+svg("outputs/notebooks/UMAP-show-scSNV-Egr/scRNA-editing-type_F_PASS=0.2.svg")
 type_counts <- sc_vcf[loci_hom_ref, c("REF", "ALT")] %>% 
     apply(1, paste, collapse = "->") %>%
     table %>%
@@ -821,7 +813,7 @@ for (i in 1:10) {
     locus <- rownames(locus_stats_hom_ref)[i]
     svg(
         sprintf(
-            "outputs/notebooks/UMAP-show-scSNV/alt_frac_hist_%s_hom_ref.svg",
+            "outputs/notebooks/UMAP-show-scSNV-Egr/alt_frac_hist_%s_hom_ref.svg",
             locus
         ),
         width = 7,
@@ -864,7 +856,7 @@ num_passed <- apply(ALL_passed, 1, sum)
 # Add marginal histograms
 # ggMarginal(p, type = "histogram", fill = "steelblue", bins = 30)
 
-svg("outputs/notebooks/UMAP-show-scSNV/genotyping/hist_#hq_supporting_R|R.svg")
+svg("outputs/notebooks/UMAP-show-scSNV-Egr/genotyping/hist_#hq_supporting_R|R.svg")
 hist(
     num_passed,
     breaks = 50,
@@ -914,11 +906,11 @@ for (i in 1:length(path_lcm_editing)) {
 }
 write.csv(
     corr_pairwise_filled_pearson,
-    "outputs/notebooks/UMAP-show-scSNV/lcm-editing-correlation-pearson-prevent-0-inflation.csv"
+    "outputs/notebooks/UMAP-show-scSNV-Egr/lcm-editing-correlation-pearson-prevent-0-inflation.csv"
 )
 write.csv(
     cor(lcm_editing_freq, use = "pairwise.complete.obs", method = "pearson"),
-    "outputs/notebooks/UMAP-show-scSNV/lcm-editing-correlation-pearson-pairwise.complete.obs.csv"
+    "outputs/notebooks/UMAP-show-scSNV-Egr/lcm-editing-correlation-pearson-pairwise.complete.obs.csv"
 )
 ```
 
@@ -970,7 +962,7 @@ if (filled) {
     use <- "pairwise.complete.obs"
 }
 fout <- sprintf(
-    "outputs/notebooks/UMAP-show-scSNV/LCM_correlation/%s-UMAP_LCM_Correlation_%s_Fill_%s.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/LCM_correlation/%s-UMAP_LCM_Correlation_%s_Fill_%s.svg",
     umap,
     method,
     filled
@@ -1078,7 +1070,7 @@ NOTE: go to the second top chunk if `dna_snv` is not loaded
 ```{R}
 # plot histogram of DNA SNV (including AF == 1)
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/dna_snv_hist.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/dna_snv_hist.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -1093,7 +1085,7 @@ hist(
 dev.off()
 # plot histogram of DNA SNV (excluding AF == 1)
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/dna_snv_hist_exclude_AF=1.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/dna_snv_hist_exclude_AF=1.svg",
     width = 7,
     height = 7,
     bg = "white"
@@ -1109,7 +1101,7 @@ dev.off()
 # plot scatter plot of AF v.s. DP (to see if AF is correlated with DP)
 # Note: exclude AF == 1 loci
 svg(
-    "outputs/notebooks/UMAP-show-scSNV/dna_snv_AF~DP.svg",
+    "outputs/notebooks/UMAP-show-scSNV-Egr/dna_snv_AF~DP.svg",
     width = 7,
     height = 7,
     bg = "white"

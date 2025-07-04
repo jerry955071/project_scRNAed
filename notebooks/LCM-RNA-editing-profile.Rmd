@@ -1,0 +1,88 @@
+---
+title: "Profiling LCM-RNA editing based on GATK genotyping results"
+author: "Chia-Chen Chu"
+date: '2025-05-21'
+output: html_document
+---
+
+Load packages
+```{r}
+library(magrittr)
+library(data.table)
+library(ggplot2)
+```
+
+
+Load data
+```{r}
+# load GATK profiling results
+path_hom_ref <- "outputs/VariantCalling-DNA/gatk_joint/hom_ref.vcf"
+hom_ref <- fread(cmd=sprintf("grep -v '^##' %s", path_hom_ref))
+hom_ref[, POS := trimws(POS)]
+hom_ref[, RN := paste0(`#CHROM`, ":", POS)]
+
+# load REDItool 1 called LCM RNA editing table
+path_lcm_reditable <- list(
+    fiber_rep1 = "outputs/LCM-RNA-editing/subset-reditable/fiber-rep1-subset.tsv",
+    fiber_rep2 = "outputs/LCM-RNA-editing/subset-reditable/fiber-rep2-subset.tsv",
+    fiber_rep3 = "outputs/LCM-RNA-editing/subset-reditable/fiber-rep3-subset.tsv",
+    vessel_rep1 = "outputs/LCM-RNA-editing/subset-reditable/vessel-rep1-subset.tsv",
+    vessel_rep2 = "outputs/LCM-RNA-editing/subset-reditable/vessel-rep2-subset.tsv",
+    vessel_rep3 = "outputs/LCM-RNA-editing/subset-reditable/vessel-rep3-subset.tsv",
+    ray_rep1 = "outputs/LCM-RNA-editing/subset-reditable/ray-rep1-subset.tsv",
+    ray_rep2 = "outputs/LCM-RNA-editing/subset-reditable/ray-rep2-subset.tsv",
+    ray_rep3 = "outputs/LCM-RNA-editing/subset-reditable/ray-rep3-subset.tsv"
+)
+lcm_reditable <- lapply(
+    path_lcm_reditable,
+    function(x) {
+        foo <- fread(x, sep = "\t", header = FALSE)
+        setnames(foo,  c(
+            "Region",
+            "Position",
+            "Reference",
+            "Strand",
+            "Coverage-q30",
+            "MeanQ",
+            "BaseCount[A,C,G,T]",
+            "AllSubs",
+            "Frequency",
+            "gCoverage-q30",
+            "gMeanQ",
+            "gBaseCount[A,C,G,T]",
+            "gAllSubs",
+            "gFrequency"
+        ))
+        foo[, RN := paste(Region, Position, sep = ":")]
+        setkey(foo, RN)
+        return(foo)
+    }
+)
+
+# output directory
+path_output <- "outputs/notebooks/LCM-RNA-editing-profile"
+dir.create(path_output)
+```
+```{r}
+for (i in 1:length(lcm_reditable)) {
+    reditable_i <- lcm_reditable[[i]]
+    sample_name <- names(lcm_reditable)[i]
+    hom_ref_reditable <- reditable_i[hom_ref$RN,]
+    subtypes <- hom_ref_reditable[(Frequency > 0.1 & Frequency < 0.9) & `Coverage-q30` > 10, AllSubs] %>%
+        table %>% as.data.table
+    colnames(subtypes) <- c("V1", "N")
+    # save plot
+    svg(sprintf("outputs/notebooks/LCM-RNA-editing-profile/subtypes_%s.svg", sample_name))
+    p <- ggplot(subtypes[N > 0,], aes(x = V1, y = N)) +
+        geom_bar(stat = "identity") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        labs(
+            title = "LCM RNA editing sites\nAt R|R loci\n0.1 < ratio < 0.9; coverage-q30 > 10\nShow counts > 0",
+            x = "Type of editing ",
+            y = "Counts"
+        )
+    print(p)
+    dev.off()
+}
+```
+

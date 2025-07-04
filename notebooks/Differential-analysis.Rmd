@@ -1,0 +1,371 @@
+---
+title: "Identify differentially edited or ASE loci"
+author: "Chia-Chen Chu"
+date: '2025-05-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+```{r}
+library(Matrix)
+library(data.table)
+library(ggplot2)
+library(magrittr)
+library(doParallel)
+library(foreach)
+setDTthreads(threads = 60)
+```
+
+
+## Configure work place
+```{r}
+# output directory
+path_output <- "outputs/notebooks/Differential-analysis/"
+dir.create(path_output)
+
+# single-cell SNV data
+path_alt_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/alt.mtx"
+path_ref_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/ref.mtx"
+path_barcodes <- "outputs/Remapping/renamer/ptr_tenx_batch1/barcodes.tsv"
+path_snv_loci <- "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.txt"
+# read data
+alt_mtx <- readMM(path_alt_mtx)
+ref_mtx <- readMM(path_ref_mtx)
+barcodes <- fread(path_barcodes, header = FALSE)
+snv_loci <- fread(path_snv_loci, header = FALSE)
+colnames(alt_mtx) <- barcodes$V1
+row.names(alt_mtx) <- snv_loci$V1
+colnames(ref_mtx) <- barcodes$V1
+row.names(ref_mtx) <- snv_loci$V1
+# calculate coverage/alt_frac matrix
+cov_thresh <- 5
+cov_mtx <- alt_mtx + ref_mtx
+alt_frac <- alt_mtx / cov_mtx
+
+# single-cell SNV clusters
+path_snv_cluster <- "outputs/notebooks/UMAP-show-scSNV/snv-cluster.csv"
+snv_cluster <- fread(path_snv_cluster, header = TRUE, sep = ",")
+all(snv_cluster$Barcode == colnames(alt_mtx)) # TRUE
+
+# gene-expression clusters
+path_cell_types <- "references/ptr_tenx_batch1_rs17_curated.csv"
+ge_cluster_4860 <- fread(path_cell_types, header = TRUE, sep = ",")
+setkey(ge_cluster_4860, Barcode)
+ge_cluster_4870 <- ge_cluster_4860[colnames(alt_mtx), ]
+
+# R|R loci
+path_hom_ref <- "outputs/VariantCalling-DNA/gatk_joint/hom_ref.vcf"
+hom_ref <- fread(cmd=sprintf("grep -v '^##' %s", path_hom_ref))
+hom_ref[, POS := trimws(POS)]
+hom_ref[, RN := paste0(`#CHROM`, ":", POS)]
+
+
+# REDITs scripts
+path_REDIT_LLR <- "src/REDITs/REDIT_LLR.R"
+source(path_REDIT_LLR)
+
+# vars
+perc_thresh <- 0.01
+```
+
+## Show SNV cluster colors
+```{r}
+color_snv <- c(
+    "1" = "#197D95",
+    "2" = "#4DBF92",
+    "3" = "#6362A7",
+    "4" = "#06185B",
+    "5" = "#72E993",
+    "6" = "#DEF5E5",
+    "7" = "#6A0B8C",
+    "8" = "#3C91E6",
+    "9" = "#F4A261",
+    "10" = "#E76F51"
+)
+
+# Base R color bar
+barplot(
+    rep(1, length(color_snv)),
+    col = color_snv,
+    names.arg = names(color_snv),
+    las = 2,
+    cex.names = 0.8,
+    border = NA,
+    main = "Color Palette for SNV Clusters"
+)
+```
+## Show GE cluster colors
+```{r}
+color_ge <- ge_cluster[, c("Cluster", "Color")] %>% unique()
+color_ge <- color_ge[order(color_ge$Cluster), ]
+# Base R color bar
+barplot(
+    rep(1, nrow(color_ge)),
+    col = color_ge$Color,
+    names.arg = color_ge$Cluster,
+    las = 2,
+    cex.names = 0.8,
+    border = NA,
+    main = "Color Palette for GE Clusters"
+)
+```
+## Plot distribution of coverage
+```{r}
+svg(sprintf("%s/hist_coverage_locus=all.svg", path_output))
+hist(
+    as.vector(cov_mtx[cov_mtx > 0]),
+    xlab = "coverage",
+    ylab = "No. locus-cell",
+    main = "Coverage at each locus-cell",
+    xlim = c(0, 20),
+    breaks = c(1:500)
+)
+dev.off()
+```
+```{r}
+svg(sprintf("%s/hist_coverage_locus_cov_gt_10.svg", path_output))
+hist(
+    as.vector(cov_mtx[cov_mtx > 10]),
+    xlab = "coverage",
+    ylab = "No. locus-cell",
+    main = "Coverage at each locus-cell (coverage > 10)",
+    xlim = c(0, 100),
+    breaks = c(1:500)
+)
+dev.off()
+```
+
+## N_cells(coverage >= cov_thresh) at each locus
+```{r}
+n_cell_cov_gt_thresh <- rowSums(cov_mtx >= cov_thresh)
+svg(sprintf("%s/hist_n_cells_coverage_gt_%s.svg", path_output, cov_thresh))
+hist(
+    n_cell_cov_gt_thresh[n_cell_cov_gt_thresh > 0],
+    xlab = "N_cells(coverage > threshold)",
+    ylab = "N_locus",
+    main = "N_cells(coverage > threshold) at each locus",
+    breaks = 0:5000,
+    xlim = c(0, 50)
+)
+dev.off()
+```
+
+
+
+## Test for differential editing using REDITs
+```{r}
+cond1_clusters <- c(7)
+cond2_clusters <- c(1)
+cond1_label <- "Fiber"
+cond2_label <- "Vessel"
+fill_manual <- c("Fiber" = "red", "Vessel" = "blue")
+
+# this data.table store differential analysis results
+da_results <- data.table(
+    locus = hom_ref$RN,
+    perc_cond1 = NA_real_,
+    perc_cond2 = NA_real_,
+    p_value = NA_real_
+)
+setkey(da_results, locus)
+
+# set group label by cluster number
+ge_cluster_4870_copy <- ge_cluster_4870
+ge_cluster_4870_copy$groups <- ""
+ge_cluster_4870_copy[Cluster %in% cond1_clusters, "groups"] <- "cond1"
+ge_cluster_4870_copy[Cluster %in% cond2_clusters, "groups"] <- "cond2"
+groups <- ge_cluster_4870_copy$groups
+groups_factor <- factor(groups, levels = c("cond1", "cond2"), labels = c(cond1_label, cond2_label))
+
+# subset matrices
+alt_mtx_in_group <- alt_mtx[, !is.na(groups_factor)]
+ref_mtx_in_group <- ref_mtx[, !is.na(groups_factor)]
+cov_mtx_in_group <- cov_mtx[, !is.na(groups_factor)]
+alt_frac_in_group <- alt_frac[, !is.na(groups_factor)]
+
+# At each locus calculate Percent(coverage >= cov_thresh) of cond 1 and cond 2
+da_results$perc_cond1 <- (cov_mtx[da_results$locus, groups == "cond1"] >= cov_thresh) %>% rowMeans
+da_results$perc_cond2 <- (cov_mtx[da_results$locus, groups == "cond2"] >= cov_thresh) %>% rowMeans
+
+# calculate p-value
+da_results[(perc_cond1 > perc_thresh) & (perc_cond2 > perc_thresh), p_value := {
+    data_valid <- cov_mtx_in_group[.BY$locus, ] >= cov_thresh
+    REDIT_LLR(
+        data = rbind(
+            alt_mtx_in_group[.BY$locus, data_valid],
+            ref_mtx_in_group[.BY$locus, data_valid]
+        ),
+        groups = na.omit(groups_factor)[data_valid] %>% as.vector
+    )$p.value
+}, by = locus]
+
+# correct p-value
+da_results[!is.na(p_value), p_adj := p.adjust(p_value, method = "BH")]
+
+# extract differential analysis results
+to_plot <- da_results[!is.na(p_adj), ]
+
+# plot alt-fraction per locus
+for (nth_row in 1:nrow(to_plot)) {
+    # locus name
+    locus <- to_plot[nth_row, locus]
+    
+    # get alt-fraction & coverage
+    alt_frac_locus <- data.table(
+        alt_frac = alt_frac_in_group[locus, ],
+        cov = cov_mtx_in_group[locus, ],
+        group = na.omit(groups_factor)
+    )
+    
+    # plot only coverage > threshold
+    alt_frac_locus <- alt_frac_locus[cov >= cov_thresh, ]
+    p <- ggplot(alt_frac_locus, aes(x = alt_frac, fill = group)) + 
+        scale_fill_manual(
+            values = fill_manual
+        ) +
+        geom_histogram(
+            aes(y = after_stat(density)),
+            bins = 100,
+            position = "identity",
+            alpha = 0.5
+        ) +
+        xlim(-0.01, 1.01) +
+        labs(
+            x = "Alternative Allele Fraction",
+            y = "Density",
+            title = "Normalized Histogram of alt_frac at %s (R|R)\np-adj=%.3f\n%%%s=%.1f%%\n%%%s=%.1f%%\ncoverage>=%s" %>% sprintf(
+                locus,
+                to_plot[nth_row, p_adj],
+                cond1_label,
+                to_plot[nth_row, perc_cond1] * 100,
+                cond2_label,
+                to_plot[nth_row, perc_cond2] * 100,
+                cov_thresh
+            ),
+            fill = "Group"
+        ) +
+        theme_minimal()
+    svg(sprintf(
+        "%s/hist_alt_frac_%s_vs_%s_%s.svg",
+        path_output,
+        cond1_label,
+        cond2_label,
+        locus %>% gsub(":", "-", .)
+    ))
+    print(p)
+    dev.off()
+}
+```
+
+
+Test differential editing between ray cells and all other cells using REDITs
+```{r}
+# this data.table store differential analysis results
+da_results_ray_to_all <- data.table(
+    locus = hom_ref$RN,
+    perc_cond1 = NA_real_,
+    perc_cond2 = NA_real_,
+    pval = NA_real_
+)
+setkey(da_results_ray_to_all, locus)
+
+# set group label by cluster number
+cond1 <- c(9, 4)
+cond2 <- setdiff(1:10, cond1)
+snv_cluster_copy <- snv_cluster
+snv_cluster_copy$groups <- ""
+snv_cluster_copy[Cluster %in% cond1, "groups"] <- "cond1"
+snv_cluster_copy[Cluster %in% cond2, "groups"] <- "cond2"
+groups <- snv_cluster_copy$groups
+groups_factor <- factor(groups)
+
+# calculate percent non-NA occurrence of cond 1 and cond 2
+da_results_ray_to_all$perc_cond1 <- (cov_mtx >= cov_thresh)[da_results_ray_to_all$locus, groups == "cond1"] %>% rowMeans
+da_results_ray_to_all$perc_cond2 <- (cov_mtx >= cov_thresh)[da_results_ray_to_all$locus, groups == "cond2"] %>% rowMeans
+
+# calculate p-value 
+alt_mtx_in_group <- alt_mtx[, snv_cluster[Cluster %in% c(cond1, cond2), Barcode]]
+ref_mtx_in_group <- ref_mtx[, snv_cluster[Cluster %in% c(cond1, cond2), Barcode]]
+da_results_ray_to_all[(perc_cond1 > perc_thresh) & (perc_cond2 > perc_thresh), p_value := {
+    data <- rbind(alt_mtx_in_group[.BY$locus, ], ref_mtx_in_group[.BY$locus, ])
+    groups <- snv_cluster_copy[Cluster %in% c(cond1, cond2), groups] %>% as.character
+    data_valid <- colSums(data) >= cov_thresh
+    data <- data[, data_valid]
+    groups <- groups[data_valid]
+    REDIT_LLR(data ,groups)$p.value
+}, by = locus]
+
+
+# correct p-value
+da_results_ray_to_all[, p_adj := p.adjust(p_value, method = "BH")]
+```
+
+
+Plot alt_frac marked with p-values
+```{r}
+to_plot <- da_results_ray_to_all[!is.na(p_adj),]
+alt_frac_in_group <- alt_frac[, snv_cluster[Cluster %in% c(cond1, cond2), Barcode]]
+cov_mtx_in_group <- cov_mtx[, snv_cluster[Cluster %in% c(cond1, cond2), Barcode]]
+for (nth_row in 1:nrow(to_plot)) {
+    locus <- to_plot[nth_row, locus]
+    # get alt-fraction
+    alt_frac_locus <- data.table(
+        alt_frac = alt_frac_in_group[locus, ],
+        cov = cov_mtx_in_group[locus, ],
+        group = snv_cluster_copy[Cluster %in% c(cond1, cond2), groups] %>% as.character
+    )
+    # plot only coverage > threshold
+    alt_frac_locus <- alt_frac_locus[cov >= cov_thresh, ]
+    p <- ggplot(alt_frac_locus, 
+            aes(
+                x = alt_frac,
+                fill = factor(group, levels = c("cond1", "cond2"), labels = c("RO", "others"))
+            )
+        ) + 
+        scale_fill_manual(
+            values = c(
+                "RO" = "red",
+                "others" = "blue"
+                )
+        ) +
+        geom_histogram(
+            aes(y = after_stat(density)),
+            bins = 100,
+            position = "identity",
+            alpha = 0.5
+        ) +
+        xlim(-0.01, 1.01) +
+        labs(
+            x = "Alternative Allele Fraction",
+            y = "Density",
+            title = "Normalized Histogram of alt_frac at %s (R|R)\np-adj=%s\nperc_cond1=%s\nperc_cond2=%s\ncov_thresh>=%s" %>% sprintf(
+                locus,
+                to_plot[nth_row, p_adj],
+                to_plot[nth_row, perc_cond1],
+                to_plot[nth_row, perc_cond2],
+                cov_thresh
+            ),
+            fill = "Group"
+        ) +
+        theme_minimal()
+    svg(sprintf(
+        "%s/hist_alt_frac_RO:Others_%s.svg",
+        path_output,
+        locus
+    ))
+    print(p)
+    dev.off()
+}
+```
+
+
+## Re-write differential analysis (& plotting?) into 1 function
+```{r}
+```
+
+
+

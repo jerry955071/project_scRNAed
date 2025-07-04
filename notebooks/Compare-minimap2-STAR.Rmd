@@ -1,0 +1,288 @@
+```{r}
+library(Matrix)
+library(data.table)
+```
+
+Load data
+```{r}
+# read alt/ref matrix called by VarTrix
+path_alt_mtx_mini <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/alt.mtx"
+path_ref_mtx_mini <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/ref.mtx"
+path_alt_mtx_star <- "outputs/VariantCalling/vartrix-STAR/ptr_tenx_batch1/alt.mtx"
+path_ref_mtx_star <- "outputs/VariantCalling/vartrix-STAR/ptr_tenx_batch1/ref.mtx"
+alt_mtx_mini <- readMM(path_alt_mtx_mini)
+ref_mtx_mini <- readMM(path_ref_mtx_mini)
+alt_mtx_star <- readMM(path_alt_mtx_star)
+ref_mtx_star <- readMM(path_ref_mtx_star)
+
+# barcodes, loci
+path_barcodes <- "outputs/Remapping/renamer/ptr_tenx_batch1/barcodes.tsv"
+path_snv_loci <- "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.txt"
+barcodes <- fread(path_barcodes, header = FALSE)
+snv_loci <- fread(path_snv_loci, header = FALSE)
+
+# rename col, row
+colnames(alt_mtx_mini) <- barcodes$V1
+row.names(alt_mtx_mini) <- snv_loci$V1
+colnames(ref_mtx_mini) <- barcodes$V1
+row.names(ref_mtx_mini) <- snv_loci$V1
+colnames(alt_mtx_star) <- barcodes$V1
+row.names(alt_mtx_star) <- snv_loci$V1
+colnames(ref_mtx_star) <- barcodes$V1
+row.names(ref_mtx_star) <- snv_loci$V1
+```
+# Compare coverage per locus
+```{r}
+coverage_per_locus_mini <- rowSums(alt_mtx_mini + ref_mtx_mini)
+coverage_per_locus_star <- rowSums(alt_mtx_star + ref_mtx_star)
+data <- data.table(
+    x = coverage_per_locus_mini,
+    y = coverage_per_locus_star
+)
+```
+
+Plot minimap2 coverage as X, STAR coverage as Y
+```{r}
+# Fit the linear model
+fit <- lm(y ~ x, data = data)
+
+# Extract regression formula as a string
+coeff <- coef(fit)
+r2 <- summary(fit)$r.squared
+eq_label <- sprintf("y = %.4f x + %.2f\n      (R2 = %.2f)", coeff[2], coeff[1], r2)
+
+# Plot
+p <- ggplot(data, aes(x = x, y = y)) +
+    geom_point(color = "black", alpha = 0.1, size = 0.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+    annotate(
+        "text",
+        x = 5000,
+        y = 3000,
+        label = eq_label,
+        hjust = 0,
+        vjust = 1,
+        color = "red",
+        size = 3
+    ) +
+    scale_x_continuous(limits = c(0, 10000)) +
+    scale_y_continuous(limits = c(0, 10000)) +
+    labs(
+        x = "Based on minimap2 alignment (all reads)",
+        y = "Based on STAR alignment (all reads)",
+        title = sprintf("Coverage per locus")
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(),
+        plot.background = element_rect(fill = "white", color = NA)
+    )
+
+png("outputs/notebooks/Compare-minimap2-STAR/coverage_per_locus_minimap2-STAR_all_reads.png",
+    width = 1000,
+    height = 1000,
+    res = 150
+)
+print(p)
+dev.off()
+```
+
+# Compare `ref` coverage per locus
+```{r}
+coverage_per_locus_mini <- rowSums(ref_mtx_mini)
+coverage_per_locus_star <- rowSums(ref_mtx_star)
+data <- data.table(
+    x = coverage_per_locus_mini,
+    y = coverage_per_locus_star
+)
+```
+
+Plot minimap2 coverage as X, STAR coverage as Y
+```{r}
+# Fit the linear model
+fit <- lm(y ~ x, data = data)
+
+# Extract regression formula as a string
+coeff <- coef(fit)
+r2 <- summary(fit)$r.squared
+eq_label <- sprintf("y = %.4f x + %.2f\n      (R2 = %.2f)", coeff[2], coeff[1], r2)
+
+# Plot
+p <- ggplot(data, aes(x = x, y = y)) +
+    geom_point(color = "black", alpha = 0.1, size = 0.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+    annotate(
+        "text",
+        x = 5000,
+        y = 3000,
+        label = eq_label,
+        hjust = 0,
+        vjust = 1,
+        color = "red",
+        size = 3
+    ) +
+    scale_x_continuous(limits = c(0, 10000)) +
+    scale_y_continuous(limits = c(0, 10000)) +
+    labs(
+        x = "Based on minimap2 alignment (all reads)",
+        y = "Based on STAR alignment (all reads)",
+        title = sprintf("Coverage per locus (reference bases)")
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(),
+        plot.background = element_rect(fill = "white", color = NA)
+    )
+
+png("outputs/notebooks/Compare-minimap2-STAR/ref_coverage_per_locus_minimap2-STAR_all_reads.png",
+    width = 1000,
+    height = 1000,
+    res = 150
+)
+print(p)
+dev.off()
+```
+# Compare `alt` coverage per locus
+```{r}
+coverage_per_locus_mini <- rowSums(alt_mtx_mini)
+coverage_per_locus_star <- rowSums(alt_mtx_star)
+data <- data.table(
+    x = coverage_per_locus_mini,
+    y = coverage_per_locus_star
+)
+```
+
+Plot minimap2 coverage as X, STAR coverage as Y
+```{r}
+# Fit the linear model
+fit <- lm(y ~ x, data = data)
+
+# Extract regression formula as a string
+coeff <- coef(fit)
+r2 <- summary(fit)$r.squared
+eq_label <- sprintf("y = %.4f x + %.2f\n      (R2 = %.2f)", coeff[2], coeff[1], r2)
+
+# Plot
+p <- ggplot(data, aes(x = x, y = y)) +
+    geom_point(color = "black", alpha = 0.1, size = 0.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+    annotate(
+        "text",
+        x = 5000,
+        y = 3000,
+        label = eq_label,
+        hjust = 0,
+        vjust = 1,
+        color = "red",
+        size = 3
+    ) +
+    scale_x_continuous(limits = c(0, 10000)) +
+    scale_y_continuous(limits = c(0, 10000)) +
+    labs(
+        x = "Based on minimap2 alignment (all reads)",
+        y = "Based on STAR alignment (all reads)",
+        title = sprintf("Coverage per locus (non-reference)")
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(),
+        plot.background = element_rect(fill = "white", color = NA)
+    )
+
+png("outputs/notebooks/Compare-minimap2-STAR/alt_coverage_per_locus_minimap2-STAR_all_reads.png",
+    width = 1000,
+    height = 1000,
+    res = 150
+)
+print(p)
+dev.off()
+```
+```{r}
+data[y == 0 & x != 0, x] %>% table %>% as.data.table
+```
+
+
+```{r}
+data[y == 0 & x > 0 & x < 50, x] %>%  hist(breaks = c(0:50))
+```
+
+
+# Compare median alt frac per locus
+```{r}
+med_alt_frac_per_locus_mini <- apply(alt_mtx_mini / (alt_mtx_mini + ref_mtx_mini), 1, median, na.rm = TRUE)
+med_alt_frac_per_locus_star <- apply(alt_mtx_star / (alt_mtx_star + ref_mtx_star), 1, median, na.rm = TRUE)
+data <- data.table(
+    x = med_alt_frac_per_locus_mini,
+    y = med_alt_frac_per_locus_star
+)
+```
+
+Plot minimap2 median alt_frac as X, STAR median alt_frac as Y
+```{r}
+# Fit the linear model
+fit <- lm(y ~ x, data = data)
+
+# Extract regression formula as a string
+coeff <- coef(fit)
+r2 <- summary(fit)$r.squared
+eq_label <- sprintf("y = %.4f x + %.2f\n      (R2 = %.2f)", coeff[2], coeff[1], r2)
+
+# Plot
+p <- ggplot(data, aes(x = x, y = y)) +
+    geom_point(color = "black", alpha = 0.1, size = 0.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) +
+    annotate(
+        "text",
+        x = .5,
+        y = .5,
+        label = eq_label,
+        hjust = 0,
+        vjust = 1,
+        color = "red",
+        size = 3
+    ) +
+    scale_x_continuous(limits = c(0, 1)) +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(
+        x = "Based on minimap2 alignment (all reads)",
+        y = "Based on STAR alignment (all reads)",
+        title = sprintf("Median alternate fraction per locus")
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line(),
+        plot.background = element_rect(fill = "white", color = NA)
+    )
+
+png("outputs/notebooks/Compare-minimap2-STAR/median_alt_frac_per_locus_minimap2-STAR_all_reads.png",
+    width = 1000,
+    height = 1000,
+    res = 150
+)
+print(p)
+dev.off()
+```
+
+Coverage at cell level
+```{r}
+cov_mini <- alt_mtx_mini + ref_mtx_mini
+cov_star <- alt_mtx_star + ref_mtx_star
+
+A_dense <- as.matrix(cov_mini)
+B_dense <- as.matrix(cov_star)
+
+row_corr <- mapply(
+    function(x, y) {if (sd(x) == 0 || sd(y) == 0) NA else cor(x, y)},
+    split(A_dense, row(A_dense)),
+    split(B_dense, row(B_dense))
+)
+```
+

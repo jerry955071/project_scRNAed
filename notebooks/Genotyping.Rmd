@@ -1,0 +1,35 @@
+# Genotyping Populus at scRNA-polymorphism locus
+```{R}
+library(magrittr)
+
+# Read GATK table
+path_gatk_table <- "outputs/VariantCalling-DNA/gatk_variantstotable/Ptr.raw.tsv"
+gatk_table <- read.table(
+    path_gatk_table,
+    header = TRUE,
+    sep = "\t",
+    stringsAsFactors = FALSE
+)
+```
+
+# Basic information
+```{R}
+nrow(gatk_table)
+```
+[1] 196076
+
+# Type distribution of the variants
+```{R}
+table(gatk_table$TYPE)
+```
+       INDEL        MIXED NO_VARIATION          SNP 
+        2051          790        55428       137807
+
+# Genotype distribution at non-variant sites
+```{R}
+genotype_no_variation <- gatk_table[gatk_table$TYPE == "NO_VARIATION", c("HET","HOM.REF", "HOM.VAR")] %>%
+    apply(1, function(x) {
+        c("HET","HOM.REF", "HOM.VAR")[which(x != 0)]
+    }) %>% unlist
+table(genotype_no_variation)
+```

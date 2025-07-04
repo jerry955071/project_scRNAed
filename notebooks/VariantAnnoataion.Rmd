@@ -1,0 +1,5 @@
+```{r}
+BiocManager::install("VariantAnnotation")
+BiocManager::install("GenomicFeatures")
+BiocManager::install("BSgenome")
+```
