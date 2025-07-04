@@ -1,4 +1,4 @@
-test/*
+tests/*
 references/*
 src/cellranger-9.0.1/*
 outputs/*
@@ -7,3 +7,4 @@ nohup-out/*
 logs/*
 .snakemake
 rawdata/*
+.vscode/*
