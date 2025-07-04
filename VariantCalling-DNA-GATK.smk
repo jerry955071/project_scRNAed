@@ -19,10 +19,17 @@ for volume in config["volumes"]:
         docker_mount += "-w %s " % volume["container"]
 
 
+# ================= Custom functions =================
+# get_assembly: get assembly file path by species
+def get_assembly_by_sample_name(sample_name:str) -> str:
+    species = query(config["samples-dna"], "name", sample_name)["species"]
+    assembly = query(config["references"], "species", species)["assembly"]
+    return assembly
+
 # === 1. Add read group ===
 rule gatk_addreplacerg:
     input:
-        "/home/b05b01002/HDD/project_RE/outputs/sorted_bam/Ptr/DNA/{sample}.sorted.bam"
+        lambda wildcards: query(config["samples-dna"], "name", wildcards.sample)["bam_path"]
     output:
         "outputs/VariantCalling-DNA/gatk_addreplacerg/{sample}.sorted.addrg.bam"
     log:
@@ -64,11 +71,11 @@ rule gatk_markduplicates:
 # === 3. Create sequence dictionary ===
 rule gatk_create_seq_dict:
     input:
-        "references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa"
+        "{assembly}.fa"
     output:
-        "references/Ptr/assembly/Ptrichocarpa_533_v4.0.dict"
+        "{assembly}.dict"
     log:
-        "logs/VariantCalling-DNA/gatk_create_seq_dict/Ptr.log"
+        "logs/VariantCalling-DNA/gatk_create_seq_dict/{assembly}.log"
     shell:
         """
         docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
@@ -78,16 +85,20 @@ rule gatk_create_seq_dict:
             > {log} 2>&1
         """
 
-
 # === 3. HaplotypeCaller (GVCF mode) ===
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/30332006386459-HaplotypeCaller
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/360035531532-HaplotypeCaller-Reference-Confidence-Model-GVCF-mode
+# TODO: target loci will be merged per species
+target_loci = {
+    "ptr": "outputs/VariantCalling/ptr/snv.loci.list",
+    "egr": "outputs/VariantCalling/egr/snv.loci.list"
+}
 rule gatk_haplotypecaller:
     input:
         bam="outputs/VariantCalling-DNA/gatk_markduplicates/{sample}.sorted.addrg.markdup.bam",
-        reference="references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa",
-        reference_dict="references/Ptr/assembly/Ptrichocarpa_533_v4.0.dict",
-        intervals="outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.list"
+        reference=lambda wildcards: get_assembly_by_sample_name(wildcards.sample),
+        reference_dict=lambda wildcards: get_assembly_by_sample_name(wildcards.sample).replace(".fa", ".dict"),
+        intervals=lambda wildcards: target_loci[query(config["samples-dna"], "name", wildcards.sample)["species"]]
     output:
         gvcf="outputs/VariantCalling-DNA/gatk_gvcf/{sample}.g.vcf.gz"
     log:
@@ -106,18 +117,23 @@ rule gatk_haplotypecaller:
 
 # === 4. GenomicsDBImport (combine GVCFs) ===
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/30332006200603-GenomicsDBImport
+# TODO: try remove -L; remove rule 'create_interval_list' if is faster
 rule gatk_genomicsdbimport:
     threads: 32
     input:
-        gvcfs=expand(
-            "outputs/VariantCalling-DNA/gatk_gvcf/{sample}.g.vcf.gz",
-            sample=[i["name"] for i in config["samples-dna"]]
-        ),
-        intervals="references/Ptr/assembly/intervals.list"
+        gvcfs=lambda wildcards: [
+            "outputs/VariantCalling-DNA/gatk_gvcf/%s.g.vcf.gz" % query_all(
+                d=config["samples-dna"],
+                k="species",
+                v=wildcards.species,
+                k_out="name"
+            )
+        ],
+        intervals="outputs/VariantCalling-DNA/{species}/intervals.list"
     output:
-        db_dir=directory("outputs/VariantCalling-DNA/gatk_joint/db")
+        db_dir=directory("outputs/VariantCalling-DNA/gatk_joint/{species}/db")
     log:
-        "logs/VariantCalling-DNA/gatk_joint/genomicsdb.log"
+        "logs/VariantCalling-DNA/gatk_joint/{species}/genomicsdb.log"
     params:
         variant_flags=lambda wildcards, input: " ".join(f"--variant {f}" for f in input.gvcfs),
     shell:
@@ -132,16 +148,31 @@ rule gatk_genomicsdbimport:
             > {log} 2>&1
         """
 
+rule create_intervals_list:
+    input:
+        lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"] + ".fai"
+    output:
+        "outputs/VariantCalling-DNA/{species}/intervals.list"
+    log:
+        "logs/VariantCalling-DNA/gatk_joint/create_intervals_list/{species}.log"
+    shell:
+        """
+        cat {input} | awk '{{print $1}}' > {output}
+        """
+
 # === 5. GenotypeGVCFs (joint genotyping) ===
 rule gatk_genotypegvcfs:
     input:
-        db_dir="outputs/VariantCalling-DNA/gatk_joint/db",
-        reference="references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa",
-        intervals="outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.list"
+        db_dir="outputs/VariantCalling-DNA/gatk_joint/{species}/db",
+        reference=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
+        intervals=lambda wildcards: {
+            "ptr": "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.list",
+            "egr": "outputs/VariantCalling/vawk/egr_tenx_batch1.snv.loci.list"
+        }[wildcards.species]
     output:
-        vcf="outputs/VariantCalling-DNA/gatk_joint/Ptr.raw.vcf.gz"
+        vcf="outputs/VariantCalling-DNA/gatk_joint/{species}.raw.vcf.gz"
     log:
-        "logs/VariantCalling-DNA/gatk_joint/genotypegvcfs.Ptr.log"
+        "logs/VariantCalling-DNA/gatk_joint/genotypegvcfs.{species}.log"
     shell:
         """
         docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
@@ -160,12 +191,12 @@ rule gatk_genotypegvcfs:
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/360035531112--How-to-Filter-variants-either-with-VQSR-or-by-hard-filtering#2
 rule gatk_variant_filtration:
     input:
-        vcf="outputs/VariantCalling-DNA/gatk_joint/Ptr.raw.vcf.gz",
-        reference="references/Ptr/assembly/Ptrichocarpa_533_v4.0.fa"
+        vcf="outputs/VariantCalling-DNA/gatk_joint/{species}.raw.vcf.gz",
+        reference=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
     output:
-        vcf="outputs/VariantCalling-DNA/gatk_joint/Ptr.filtered.vcf.gz"
+        vcf="outputs/VariantCalling-DNA/gatk_joint/{species}.filtered.vcf.gz"
     log:
-        "logs/VariantCalling-DNA/gatk_joint/variant_filter.Ptr.log"
+        "logs/VariantCalling-DNA/gatk_joint/variant_filter.{species}.log"
     shell:
         """
         docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
@@ -180,52 +211,53 @@ rule gatk_variant_filtration:
 
 # Understanding GATK vcf output: https://gatk.broadinstitute.org/hc/en-us/articles/360035531692-VCF-Variant-Call-Format
 # QUAL and GQ: https://gatk.broadinstitute.org/hc/en-us/articles/360035531392-Difference-between-QUAL-and-GQ-annotations-in-germline-variant-calling
-
 # === 7. Variants to table ===
 # Reference genotype confidence model: https://gatk.broadinstitute.org/hc/en-us/articles/360035531532-HaplotypeCaller-Reference-Confidence-Model-GVCF-mode
-rule gatk_varianstotable:
-    input:
-        raw_vcf="outputs/VariantCalling-DNA/gatk_joint/Ptr.raw.vcf.gz",
-    output:
-        tsv="outputs/VariantCalling-DNA/gatk_variantstotable/Ptr.raw.tsv"
-    log:
-        "logs/VariantCalling-DNA/gatk_variantstotable/Ptr.log"
-    shell:
-        """
-        docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
-            gatk VariantsToTable \
-                -V {input.raw_vcf} \
-                -F CHROM \
-                -F POS \
-                -F TYPE \
-                -F HET \
-                -F HOM-REF \
-                -F HOM-VAR \
-                -F NSAMPLES \
-                -F NCALLED \
-                -GF RGQ \
-                -GF GQ \
-                -GF DP \
-                -O {output.tsv} \
-            > {log} 2>&1
-        """
+# rule gatk_varianstotable:
+#     input:
+#         raw_vcf="outputs/VariantCalling-DNA/gatk_joint/Ptr.raw.vcf.gz",
+#     output:
+#         tsv="outputs/VariantCalling-DNA/gatk_variantstotable/Ptr.raw.tsv"
+#     log:
+#         "logs/VariantCalling-DNA/gatk_variantstotable/Ptr.log"
+#     shell:
+#         """
+#         docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
+#             gatk VariantsToTable \
+#                 -V {input.raw_vcf} \
+#                 -F CHROM \
+#                 -F POS \
+#                 -F TYPE \
+#                 -F HET \
+#                 -F HOM-REF \
+#                 -F HOM-VAR \
+#                 -F NSAMPLES \
+#                 -F NCALLED \
+#                 -GF RGQ \
+#                 -GF GQ \
+#                 -GF DP \
+#                 -O {output.tsv} \
+#             > {log} 2>&1
+#         """
 
 # ==== 8. Find no-variant sites ====
 # TODO: add output snp.vcf
 rule categorize_sites:
     input:
-        vcf="outputs/VariantCalling-DNA/gatk_joint/Ptr.raw.vcf.gz",
+        ref=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
+        vcf="outputs/VariantCalling-DNA/gatk_joint/{species}.raw.vcf.gz",
     output:
-        hom_alt="outputs/VariantCalling-DNA/gatk_joint/hom_alt.vcf",
-        hom_ref="outputs/VariantCalling-DNA/gatk_joint/hom_ref.vcf",
-        het="outputs/VariantCalling-DNA/gatk_joint/het.vcf",
-        snp="outputs/VariantCalling-DNA/gatk_joint/snp.vcf",
+        hom_alt="outputs/VariantCalling-DNA/gatk_joint/{species}/hom_alt.vcf",
+        hom_ref="outputs/VariantCalling-DNA/gatk_joint/{species}/hom_ref.vcf",
+        het="outputs/VariantCalling-DNA/gatk_joint/{species}/het.vcf",
+        snp="outputs/VariantCalling-DNA/gatk_joint/{species}/snp.vcf"
     log:
-        "logs/VariantCalling-DNA/gatk_joint/no_variant_sites.log"
+        "logs/VariantCalling-DNA/gatk_joint/{species}/categorize_sites.log"
     shell:
         """
-        docker run {docker_mount} --rm -u $(id -u) biocontainers/bcftools:1.17-4-deb_cv1 \
-            script/categorize-sites.sh \
+        docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
+            scripts/categorize-sites.sh \
+                {input.ref} \
                 {input.vcf} \
                 {output.hom_alt} \
                 {output.hom_ref} \
