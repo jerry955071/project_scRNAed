@@ -58,6 +58,7 @@ rule freebayes_by_chromosome_DNA:
             chiaenu/freebayes:1.3.6-1 \
                 freebayes \
                     -f {input.reference_fasta} \
+                    -r {wildcards.chromosome} \
                     -iXu \
                     -C 2 \
                     -q 20 \
@@ -94,16 +95,16 @@ rule freebayes_by_chromosome_DNA:
 # ====================================================
 
 # 3. Merging vcf files (using gzipped vcf files)
-rule bcftools_merge_DNA:
+rule bcftools_concat_DNA:
     input:
         expand(
             "outputs/VariantCalling-DNA/freebayes/{chromosome}.vcf",
             chromosome=config["references"][0]["chromosomes"]
         )
     output:
-        vcf="outputs/VariantCalling-DNA/bcftools_merge/Ptr.vcf"
+        vcf="outputs/VariantCalling-DNA/bcftools_concat/Ptr.vcf"
     log:
-        "logs/VariantCalling-DNA/bcftools_merge/Ptr.log"
+        "logs/VariantCalling-DNA/bcftools_concat/Ptr.log"
     shell:
         """
         # merge vcf files
@@ -112,35 +113,26 @@ rule bcftools_merge_DNA:
             -u $(id -u) \
             --rm \
             staphb/bcftools:1.21 \
-                bcftools merge \
+                bcftools concat \
                     -O v \
                     -o {output.vcf} \
-                    --no-index \
-                    --force-samples \
                     {input} \
             1> {log} \
             2> {log}
         """
 
 # 4. Extract variants from the merged vcf file 
-# Only whose quality is above a certain threshold
-# Output fields:
-# (1) CHROM:POS (chromosome:position)
-# (2) DP (depth of coverage)
-# (5) AF (alternate allele frequency)
 rule vawk_filter_extract:
     input:
-        "outputs/VariantCalling-DNA/bcftools_merge/Ptr.vcf"
+        "outputs/VariantCalling-DNA/bcftools_concat/Ptr.vcf"
     output:
         "outputs/VariantCalling-DNA/vawk_filter_extract/Ptr.snv.loci.txt"
     log:
         "logs/VariantCalling-DNA/vawk_filter_extract/Ptr.log"
-    params:
-        qual_threshold=20
     shell:
         """
         # write header to the output file
-        echo -e "CHROM:POS\tDP\tAF" > {output}
+        echo -e "CHROM:POS\tREF\tALT\tQUAL\tDP\tRO\tAO\tQR\tQA\tAF" > {output}
 
         # extract variants using vawk
         docker run \
@@ -149,7 +141,7 @@ rule vawk_filter_extract:
             --rm \
                 chiaenu/vawk:0.0.2 \
                     vawk \
-                        '{if ($6>{params.qual_threshold}) print $1:$2,I$DP,I$AF}' \
+                        '{{print $1":"$2,$4,$5,$6,I$DP,I$RO,I$AO,I$QR,I$QA,I$AF}}' \
                         {input} \
             1>> {output} \
             2> {log}
