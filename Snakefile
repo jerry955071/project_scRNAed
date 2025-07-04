@@ -21,6 +21,19 @@ include: "VariantCalling-DNA-GATK.smk"
 include: "LCM-RNA-editing.smk"
 include: "Bulk-scRNA-editing.smk"
 
+# ===== Custom functions used by all workflows =====
+# query: query from list of dict by key-value pair
+from typing import List
+def query(d:List[dict], k:str, v:str) -> dict:
+    return [x for x in d if x[k] == v][0]
+
+# query_all: query from list of dict by key-value pair 
+# return values from the requested field
+def query_all(d:List[dict], k:str, v:str, k_out:str) -> List[str]:
+    return [x[k_out] for x in d if x[k] == v]
+# =================================================
+
+
 # call for output files
 rule VariantCalling:
     input:
