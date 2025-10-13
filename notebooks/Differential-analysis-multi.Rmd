@@ -1,0 +1,58 @@
+---
+title: "Identify differentially edited or ASE loci"
+author: "Chia-Chen Chu"
+date: '2025-05-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+```{r}
+path_REDIT_LLR <- "src/REDITs/REDIT_LLR.R"
+source(path_REDIT_LLR)
+```
+
+
+## Configure work place
+```{r}
+# paths
+path_output <- "outputs/notebooks/Differential-analysis-multi/20250729_172935/REDITs/"
+path_input <- "outputs/notebooks/Differential-analysis-multi/20250729_172935/read_counts/"
+path_results <- "outputs/notebooks/Differential-analysis-multi/20250729_172935/REDITs/p_adj.csv"
+
+# make/check path
+dir.create(path_output)
+(input_files <- list.files(path_input, full.names = TRUE))
+length(input_files)
+```
+
+
+```{r}
+get_data <- function(filename) {
+  df <- read.csv(filename)
+  count_mtx <- t(as.matrix(df[c("alt_counts", "ref_counts")]))
+  group_factor <- df[["condition"]]
+  return(list(count_mtx, group_factor))
+}
+run_REDITs <- function(filename) {
+  data <- get_data(filename)
+  res <- REDIT_LLR(data = data[[1]], groups = data[[2]])
+  return(res$p.value)
+}
+p_values <- sapply(input_files, run_REDITs)
+p_adj <- p.adjust(p_values, method = "BH")
+
+output <- data.frame(
+  locus = sapply(input_files, function(x){
+    foo <- unlist(strsplit(x, "/"))
+    return(foo[length(foo)])
+  }),
+  p_adj = p_adj
+)
+row.names(output) <- NULL
+write.csv(output, path_results, quote = FALSE, row.names = FALSE)
+```
+

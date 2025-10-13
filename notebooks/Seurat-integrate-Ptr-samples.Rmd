@@ -1,0 +1,284 @@
+```{r}
+library(Seurat)
+library(Matrix)
+```
+
+Functions
+```{r}
+read10x_to_seurat <- function(path_10x, sample_name) {
+  CreateSeuratObject(counts = Read10X(path_10x), project = sample_name)
+}
+```
+
+Define path, vars
+```{r}
+# vars
+SAMPLES <- c(
+  "ptr_tenx_batch1",
+  "ptr_tenx_batch2",
+  "ptr_tenx_tsv1",
+  "ptr_tenx_tsv2",
+  "ptr_tenx_tsv3",
+  "ptr_tenx_tsv4",
+  "ptr_tenx_tsv5",
+  "ptr_tenx_tst1",
+  "ptr_tenx_tst2",
+  "ptr_tenx_tst3",
+  "ptr_tenx_tst4",
+  "ptr_tenx_tso1",
+  "ptr_tenx_tso2",
+  "ptr_tenx_tso3",
+  "ptr_tenx_tso4"
+)
+cluster_colors <- c(
+    "1"="#1F77B4",
+    "2"="#7A4A33",
+    "3"="#E28413",
+    "4"="#F3EC5B",
+    "5"="#61C9A8",
+    "6"="#6362A7",
+    "7"="#FF0000",
+    "8"="#FF8F8F",
+    "9"="#D4D4D4",
+    "10"="#D4D4D4",
+    "11"="#D4D4D4",
+    "12"="#D4D4D4"
+)
+
+# params
+NORMALIZATION.METHOD <- "LogNormalize"
+SCALE.FATCOR <- 10000
+REFERENCE <- 1 # sample 1 --> ptr_tenx_batch1
+METHOD <- CCAIntegration
+NEW.REDUCTION <- "integrated.cca"
+
+# paths
+path_output <- "outputs/notebooks/Seurat-integrate-Ptr-samples/20250729_172935"
+path_cell_identity <- "references/ptr_tenx_batch1_rs17_curated.csv"
+path_cell_identity_by_NN <- "outputs/notebooks/Seurat-integrate-Ptr-samples/cell_identity_all.csv"
+path_cellranger_mtx <- function(sample) {sprintf("outputs/CellRanger/count/%s/outs/filtered_feature_bc_matrix/", sample)}
+path_seurat_obj <- "outputs/notebooks/Seurat-integrate-Ptr-samples/seurat_obj.rds"
+path_integrated_embedding <- "outputs/notebooks/Seurat-integrate-Ptr-samples/integrated.cca_ref=1_LogNorm_scaleFactor=10000.csv"
+path_integrated_count <- "outputs/notebooks/Seurat-integrate-Ptr-samples/integrated_count.cca_ref=1_LogNorm_scaleFactor=10000.mtx"
+path_integrated_data <- "outputs/notebooks/Seurat-integrate-Ptr-samples/integrated_data.cca_ref=1_LogNorm_scaleFactor=10000.mtx"
+path_integrated_scaled_data <- "outputs/notebooks/Seurat-integrate-Ptr-samples/integrated_scaled_data.cca_ref=1_LogNorm_scaleFactor=10000.mtx"
+path_median_umap <- "outputs/notebooks/Seurat-integrate-Ptr-samples/20250729_172935/median_umap.csv"
+path_dre_results <- "outputs/notebooks/Differential-analysis-multi/20250729_172935/DRE_complete_table.csv"
+
+# load/create paths
+dir.create(path_output)
+# cell_identity_by_NN <- read.csv(path_cell_identity_by_NN)
+seurat_objs <- mapply(read10x_to_seurat, path_cellranger_mtx(SAMPLES), SAMPLES)
+seurat_obj <- merge(x = seurat_objs[[1]], y = seurat_objs[2:length(seurat_objs)])
+rm(seurat_objs); gc()
+```
+
+### Integrate
+Normalize data
+```{r}
+seurat_obj <- NormalizeData(
+  seurat_obj, 
+  normalization.method = NORMALIZATION.METHOD, 
+  scale.factor = SCALE.FATCOR
+)
+gc()
+# saveRDS(seurat_obj, file = path_seurat_obj) # save save
+```
+
+Run PCA
+```{r}
+seurat_obj <- FindVariableFeatures(
+  seurat_obj,
+  selection.method = "vst",
+  nfeatures = 2000
+)
+seurat_obj <- ScaleData(
+  seurat_obj,
+  do.scale = TRUE,
+  do.center = TRUE
+)
+seurat_obj <- RunPCA(seurat_obj)
+gc()
+# saveRDS(seurat_obj, file = path_seurat_obj) # save save
+```
+
+### Integrate based on normalized expression using CCA
+Layer `ptr_tenx_batch1` was used as reference
+This will correct the original reduction: PCA
+```{r}
+# run integration
+options(future.globals.maxSize = 10000 * 1024^2)
+seurat_obj <- IntegrateLayers(
+  object = seurat_obj,
+  method = METHOD, 
+  orig.reduction = "pca", 
+  new.reduction = NEW.REDUCTION,
+  reference = REFERENCE,
+  verbose = TRUE
+)
+seurat_obj[["RNA"]] <- JoinLayers(seurat_obj[["RNA"]])
+gc()
+```
+
+### Write Seurat object/PCA reduction to file
+```{r}
+# saveRDS(seurat_obj, file = path_seurat_obj)
+write.csv(
+  x = Embeddings(seurat_obj, reduction = "integrated.cca"),
+  file = path_integrated_embedding,
+  quote = FALSE,
+  row.names = TRUE
+)
+sparse_matrix_data <- GetAssayData(object = seurat_obj, assay = "RNA", layer = "data")
+writeMM(obj = sparse_matrix_data, file = path_integrated_data)
+```
+
+### Find cluster
+```{r}
+# seurat_obj <- FindNeighbors(seurat_obj, reduction = NEW.REDUCTION, dims = 1:30)
+# seurat_obj <- FindClusters(seurat_obj, resolution = 1)
+```
+
+### Import median UMAP embedding
+```{r}
+median_umap <- read.csv(path_median_umap)
+umap_coords_matrix <- as.matrix(median_umap[,c("x1", "x2")])
+row.names(umap_coords_matrix) <- median_umap$Barcode
+umap_dr <- CreateDimReducObject(embeddings = umap_coords_matrix, key = "UMAP_", global = TRUE, assay = "RNA")
+
+# Add the DimReducObject to your Seurat object
+seurat_obj[["umap"]] <- umap_dr
+```
+
+### Plotting
+```{r}
+seurat_obj$orig.ident <- factor(seurat_obj$orig.ident, level = SAMPLES)
+```
+
+
+```{r}
+hd_zip3 <- c(
+  "Potri.001G188800.v4.1",
+  "Potri.001G372300.v4.1",
+  "Potri.003G050100.v4.1",
+  "Potri.004G211300.v4.1",
+  "Potri.006G237500.v4.1",
+  "Potri.009G014500.v4.1",
+  "Potri.011G098300.v4.1",
+  "Potri.018G045100.v4.1"
+)
+for (g in hd_zip3) {
+  png(
+    sprintf("%s/gene_expression/hd_zip3_%s.png", path_output, g),
+    height = 2000,
+    width = 2000 * 15,
+    res = 200
+  )
+  p <- FeaturePlot(
+    seurat_obj,
+    features = g,
+    reduction = "umap",
+    split.by = "orig.ident",
+    ncol = 5,
+    pt.size = 1,
+    slot = "data"
+  )
+  print(p)
+  dev.off()
+}
+```
+
+
+### Show DRE on UMAP (gene expression)
+```{r}
+dre_results <- read.csv(path_dre_results)
+DRE_genes <- dre_results[order(dre_results$p_adj)[1:70], ]$GENEID
+DRE_genes <- DRE_genes[nchar(DRE_genes) > 0]
+DRE_genes <- paste0(DRE_genes, ".v4.1")
+DRE_genes <- DRE_genes[order(DRE_genes)]
+for (geneid in DRE_genes) {
+  p <- FeaturePlot(
+    seurat_obj, 
+    features = geneid,
+    split.by="orig.ident",
+    order = TRUE,
+    pt.size = 0.5,
+    label = FALSE,
+  ) + RestoreLegend()
+  png(
+    sprintf("%s/gene_expression/%s.png", path_output, geneid),
+    height = 2000,
+    width = 2000 * 15,
+    res = 200
+  )
+  print(p)
+  dev.off()
+}
+
+```
+
+```{r}
+summary(FetchData(seurat_obj, vars = "Potri.001G268400.v4.1", layer = "count"))
+```
+
+
+
+
+
+
+
+
+
+
+
+### Plot UMAP colored by Seurat cluster (split by batch)
+```{r}
+png(
+  sprintf("%s/%s", path_output, "umap_log_cca_ref=1_split=batch_col=seurat_cluster.png"),
+  height = 1600 * 3,
+  width = 1600 * 5,
+  res = 300
+)
+DimPlot(
+  seurat_obj,
+  reduction = "umap",
+  split.by = "orig.ident",
+  pt.size = 2,
+  ncol = 5,
+)
+dev.off()
+```
+
+
+### Write Seurat object/PCA reduction to file
+```{r}
+# saveRDS(seurat_obj, file = path_seurat_obj)
+write.csv(
+  x = Embeddings(seurat_obj, reduction = "integrated.cca"),
+  file = path_integrated_embedding,
+  quote = FALSE,
+  row.names = TRUE
+)
+```
+
+### Plot UMAP colored by NN-transfered cell type
+```{r}
+seurat_obj$cell_type <- cell_identity_by_NN$Cluster
+Idents(seurat_obj) <- "cell_type"
+png(
+  sprintf("%s/%s", path_output, "umap_rpca_ref=1_split=batch_col=reference_nn.png"),
+  height = 1600 * 3,
+  width = 1600 * 5,
+  res = 300
+)
+DimPlot(
+  seurat_obj,
+  reduction = "umap",
+  split.by = "orig.ident",
+  cols = cluster_colors,
+  pt.size = 2,
+  ncol = 5,
+)
+dev.off()
+```
+

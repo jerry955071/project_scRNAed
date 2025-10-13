@@ -1,0 +1,300 @@
+```{r}
+library(Seurat)
+library(magrittr)
+library(data.table)
+library(Matrix)
+```
+
+Define data paths
+```{r}
+sample_names <- c(
+  "ptr_tenx_batch1",
+  "ptr_tenx_batch2",
+  "ptr_tenx_tsv1",
+  "ptr_tenx_tsv2",
+  "ptr_tenx_tsv3",
+  "ptr_tenx_tsv4",
+  "ptr_tenx_tsv5"
+)
+cluster_colors <- c(
+    "1"="#1F77B4",
+    "2"="#7A4A33",
+    "3"="#E28413",
+    "4"="#F3EC5B",
+    "5"="#61C9A8",
+    "6"="#6362A7",
+    "7"="#FF0000",
+    "8"="#FF8F8F",
+    "9"="#D4D4D4",
+    "10"="#D4D4D4",
+    "11"="#D4D4D4",
+    "12"="#D4D4D4"
+)
+
+# data paths
+path_output <- "outputs/notebooks/Show-DRE-sites-on-Seurat-UMAP/"
+path_cell_identity <- "references/ptr_tenx_batch1_rs17_curated.csv"
+path_DRE_RO_FuO <- "outputs/notebooks/Differential-analysis/DRES_RO_vs_FuO.csv"
+path_DRE_RO_Others <- "outputs/notebooks/Differential-analysis/DRES_RO_vs_Others.csv"
+path_editing_level <- "outputs/notebooks/Show-DRE-sites-on-Seurat-UMAP/editing_level.csv"
+path_variant_annotation <- "tests/test-VariantAnnotation/variant_annotation_hom_ref.csv"
+
+# Read cell identity
+cell_identity <- read.csv(path_cell_identity)
+rownames(cell_identity) <- cell_identity$Barcode
+cell_identity$Cluster_name <- cluster_names[cell_identity$Cluster]
+head(cell_identity)
+
+# Read DRE results
+DRE_RO_FuO <- read.csv(path_DRE_RO_FuO)
+DRE_RO_Others <- read.csv(path_DRE_RO_Others)
+cat("#RO_vs_FuO: ", nrow(DRE_RO_FuO), "\n")
+cat("#RO_vs_others: ", nrow(DRE_RO_Others), "\n")
+cat("Union: ", union(DRE_RO_FuO$locus, DRE_RO_Others$locus) %>% length, "\n")
+cat("Intersect: ", intersect(DRE_RO_FuO$locus, DRE_RO_Others$locus) %>% length, "\n")
+DRES_RO_FuO_Others <- union(DRE_RO_FuO$locus, DRE_RO_Others$locus)
+
+# Read editing levels at DRE sites (calculated using Python)
+editing_level <- read.csv(path_editing_level,row.names = 1)
+
+# Read variant annotation
+variant_annotation <- read.csv(path_variant_annotation)
+
+# Read scSNV data
+get_alt_frac_mtx <- function(sample_name, loci_of_interest, cov_threshold) {
+  # data path based on sample name
+  path_barcodes <- "outputs/Remapping/renamer/%s/barcodes.tsv" %>% sprintf(., sample_name)
+  path_snv_loci <- "outputs/VariantCalling/vawk/%s.snv.loci.txt" %>% sprintf(., sample_name)
+  path_alt_mtx <- "outputs/VariantCalling/vartrix/%s/alt.mtx" %>% sprintf(., sample_name)
+  path_ref_mtx <- "outputs/VariantCalling/vartrix/%s/ref.mtx" %>% sprintf(., sample_name)
+  
+  # read matrix
+  barcodes <- path_barcodes %>% read.table(header = FALSE)
+  snv_loci <- path_snv_loci %>% read.table(header = FALSE)
+  alt_mtx <- path_alt_mtx %>% readMM # %>% as.matrix %>% as.data.frame
+  ref_mtx <- path_ref_mtx %>% readMM # %>% as.matrix %>% as.data.frame
+  
+  # set dim names
+  colnames(alt_mtx) <- barcodes$V1
+  colnames(ref_mtx) <- barcodes$V1
+  row.names(alt_mtx) <- snv_loci$V1
+  row.names(ref_mtx) <- snv_loci$V1
+  
+  # subset to loci of interest
+  alt_mtx <- alt_mtx[intersect(row.names(alt_mtx), validated_sites), ]
+  ref_mtx <- ref_mtx[intersect(row.names(ref_mtx), validated_sites), ]
+  cov_mtx <- alt_mtx + ref_mtx
+  alt_frac <- alt_mtx / cov_mtx
+  
+  # fill NA with 0 and mark where coverage < 5 as 0
+  alt_frac[is.na(alt_frac)] <- 0
+  alt_frac[cov_mtx < 5] <- 0
+  
+  # return 
+  return(alt_frac)
+}
+alt_fracs <- sapply(sample_names, get_alt_frac_mtx, validated_sites, 5)
+```
+
+Read 10x data
+```{r}
+read10x_to_seurat <- function(sample_name) {
+  path_cellranger_mtx <- sprintf(
+    "outputs/CellRanger/count/%s/outs/filtered_feature_bc_matrix/", 
+    sample_name
+  )
+  return(CreateSeuratObject(counts = Read10X(path_cellranger_mtx), project = sample_name))
+}
+seurat_objs <- sapply(sample_names, read10x_to_seurat)
+seurat_obj <- merge(x = seurat_objs[[1]], y = seurat_objs[2:length(seurat_objs)])
+# rm(seurat_objs)
+```
+
+Integration
+```{r}
+seurat_obj <- SCTransform(seurat_obj)
+seurat_obj <- RunPCA(seurat_obj)
+seurat_obj <- IntegrateLayers(
+  object = seurat_obj, 
+  method = CCAIntegration, 
+  orig.reduction = "pca", 
+  new.reduction = "integrated.cca",
+  normalization.method = "SCT",
+  verbose = FALSE
+)
+seurat_obj[["RNA"]] <- JoinLayers(seurat_obj[["RNA"]])
+```
+
+Find clusters
+```{r}
+seurat_obj <- FindNeighbors(seurat_obj, reduction = "integrated.cca", dims = 1:30)
+seurat_obj <- FindClusters(seurat_obj, resolution = 1)
+```
+
+Give cell identity by the nearest ptx_tenx_batch1 cell on the integrated reductions
+```{r}
+reductions <- Embeddings(seurat_obj, reduction = "integrated.cca")[,1:30]
+write.csv(
+  reductions,
+  sprintf("%s/%s", path_output, "integrated.cca.csv"),
+)
+```
+Run a python script...
+```{r}
+cell_identity <- read.csv(sprintf("%s/%s", path_output, "cell_identity_all.csv"))
+cell_identity$Cluster <- as.character(cell_identity$Cluster)
+rownames(cell_identity) <- cell_identity$Barcode
+```
+
+UMAP
+```{r}
+seurat_obj <- RunUMAP(
+  seurat_obj,
+  dims = 1:30, 
+  reduction = "integrated.cca",
+  seed.use = 42,
+  n.neighbors = 10L,
+  n.components = 2L,
+  metric = "correlation",
+  min.dist = 0.15,
+)
+```
+
+Plot UMAP with NN-inferred cell type
+```{r}
+seurat_obj$celltype <- cell_identity$Cluster
+Idents(seurat_obj) <- "celltype"
+# Visualization
+png(sprintf("%s/%s", path_output, "umap.png"), height = 1600, width = 1600, res = 300)
+DimPlot(
+  seurat_obj,
+  reduction = "umap",
+  cols = cluster_colors,
+) + NoAxes() + NoLegend()
+dev.off()
+```
+
+Plot UMAP with NN-inferred cell type, splited by batch
+```{r}
+seurat_obj$celltype <- cell_identity$Cluster
+Idents(seurat_obj) <- "celltype"
+# Visualization
+png(sprintf("%s/%s", path_output, "umap_splited.png"), height = 1600, width = 10000, res = 300)
+DimPlot(
+  seurat_obj,
+  reduction = "umap",
+  cols = cluster_colors,
+  split.by="orig.ident"
+) + NoAxes() + NoLegend()
+dev.off()
+```
+
+
+Plot expression of genes with missense mutation validated by proteome
+```{r}
+DRE_genes <- editing_level %>% 
+  colnames %>% 
+  grep("_", ., value = TRUE) %>% 
+  sapply(., function(x){
+    unlist(strsplit(x, "_"))[2] 
+  })
+for (geneid in DRE_genes) {
+  p <- FeaturePlot(
+    seurat_obj, 
+    features = geneid,
+    split.by="orig.ident",
+    order = TRUE,
+    pt.size = 0.5,
+    label = FALSE,
+  ) + RestoreLegend()
+  png(
+    sprintf("%s/gene_expression/%s.png", path_output, geneid),
+    height = 1600,
+    width = 12000,
+    res = 300
+  )
+  print(p)
+  dev.off()
+}
+```
+
+# Plot editing level of the missense sites
+```{r}
+seurat_obj <- AddMetaData(seurat_obj, editing_level)
+```
+
+```{r}
+for (locus in colnames(editing_level)) {
+  png(
+    sprintf(
+      "%s/editing_level/%s.png",
+      path_output, 
+      locus
+    ), 
+    height = 1600,
+    width = 12000,
+    res = 300
+  )
+  p <- FeaturePlot(
+    seurat_obj,
+    reduction = "umap",
+    features = locus,
+    order = TRUE,
+    split.by = "orig.ident",
+    pt.size = 0.5,
+  ) + RestoreLegend()
+  print(p)
+  dev.off()
+}
+```
+
+Editing level * expression level
+```{r}
+geneids <- colnames(editing_level) %>% sapply(
+  ., function(x){unlist(strsplit(x, "_"))[2]}
+)
+gene_expression <- FetchData(seurat_obj, vars = geneids)
+
+rm("edited_expression")
+for (locus_geneid in colnames(editing_level)) {
+  expression_level_gene <- gene_expression[unlist(strsplit(locus_geneid, "_"))[2]]
+  if (!exists("edited_expression")) {
+    edited_expression <- editing_level[locus_geneid] * expression_level_gene
+  } else {
+    edited_expression <- cbind(
+      edited_expression,
+      editing_level[locus_geneid] * expression_level_gene
+    )  
+  }
+}
+colnames(edited_expression) <- paste0(colnames(edited_expression), "_edited_expression")
+seurat_obj <- AddMetaData(seurat_obj, edited_expression)
+```
+
+Plot
+```{r}
+for (locus in colnames(edited_expression)) {
+  png(
+    sprintf(
+      "%s/edited_expression_level/%s.png",
+      path_output, 
+      locus
+    ), 
+    height = 1600,
+    width = 12000,
+    res = 300
+  )
+  p <- FeaturePlot(
+    seurat_obj,
+    reduction = "umap",
+    features = locus,
+    order = TRUE,
+    split.by = "orig.ident",
+    pt.size = 0.5,
+  ) + RestoreLegend()
+  print(p)
+  dev.off()
+}
+```
+
+

@@ -1,0 +1,190 @@
+```{r}
+library(Seurat)
+library(magrittr)
+library(data.table)
+library(Matrix)
+```
+
+Define data paths
+```{r}
+path_output <- "outputs/notebooks/Show-Proteome-Validated-on-UMAP/"
+path_ptr_tenx_batch1 <- "outputs/CellRanger/count/ptr_tenx_batch1/outs/filtered_feature_bc_matrix"
+path_cell_identity <- "references/ptr_tenx_batch1_rs17_curated.csv"
+path_proteome_validation <- "outputs/notebooks/Check-proteome-alignment-results/variant_annotation_6frames_peptide_validation.tsv"
+path_barcodes <- "outputs/Remapping/renamer/ptr_tenx_batch1/barcodes.tsv"
+path_snv_loci <- "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.txt"
+path_alt_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/alt.mtx"
+path_ref_mtx <- "outputs/VariantCalling/vartrix/ptr_tenx_batch1/ref.mtx"
+cluster_colors <- c(
+    "1"="#1F77B4",
+    "2"="#7A4A33",
+    "3"="#E28413",
+    "4"="#F3EC5B",
+    "5"="#61C9A8",
+    "6"="#6362A7",
+    "7"="#FF0000",
+    "8"="#FF8F8F",
+    "9"="#D4D4D4",
+    "10"="#D4D4D4",
+    "11"="#D4D4D4",
+    "12"="#D4D4D4"
+)
+```
+
+Read 10x data
+```{r}
+data_ptr_tenx_batch1 <- Read10X(data.dir = path_ptr_tenx_batch1)
+seurat_ptr_tenx_batch1 <- CreateSeuratObject(
+  counts = data_ptr_tenx_batch1,
+  project = "ptr_tenx_batch1"
+)
+```
+
+Read cell identity data
+```{r}
+cell_identity <- read.csv(path_cell_identity)
+rownames(cell_identity) <- cell_identity$Barcode
+cell_identity$Cluster_name <- cluster_names[cell_identity$Cluster]
+head(cell_identity)
+```
+
+Read scSNV data
+```{r}
+barcodes <- path_barcodes %>% read.table(header = FALSE)
+snv_loci <- path_snv_loci %>% read.table(header = FALSE)
+alt_mtx <- path_alt_mtx %>% readMM # %>% as.matrix %>% as.data.frame
+ref_mtx <- path_ref_mtx %>% readMM # %>% as.matrix %>% as.data.frame
+colnames(alt_mtx) <- barcodes$V1
+colnames(ref_mtx) <- barcodes$V1
+row.names(alt_mtx) <- snv_loci$V1
+row.names(ref_mtx) <- snv_loci$V1
+```
+
+Read proteome validation data
+```{r}
+proteome_validation <- read.csv(path_variant_annotation_w_validation, sep = "\t")
+proteome_validation$POS <- trimws(proteome_validation$POS)
+not_synonymous <- proteome_validation["CONSEQUENCE"] != "synonymous"
+is_covered <- proteome_validation["PEPTIDE_COVERED"] == "True"
+validated_missense <- proteome_validation[not_synonymous & is_covered, "GENEID"] %>% 
+  sapply(function(x) {
+      splited <- strsplit(x, "[.]") %>% unlist
+      sprintf("%s.%s.v4.1", splited[1], splited[2])
+  })
+validated_sites <- proteome_validation[not_synonymous & is_covered, c("CHROM", "POS")] %>% 
+  apply(1, paste, collapse = ":")
+names(validated_sites) <- NULL
+```
+
+
+SCtransform normalization
+```{r}
+seurat_ptr_tenx_batch1 <- SCTransform(seurat_ptr_tenx_batch1)
+```
+
+Dimensional reduction
+```{r}
+seurat_ptr_tenx_batch1 <- RunPCA(
+  seurat_ptr_tenx_batch1,
+  seed.use = 42,
+  verbose = FALSE
+)
+```
+
+```{r}
+seurat_ptr_tenx_batch1 <- RunUMAP(
+  seurat_ptr_tenx_batch1,
+  dims = 1:30,
+  seed.use = 42,
+  n.neighbors = 30L,
+  n.components = 2L,
+  metric = "correlation",
+  min.dist = 0.3,
+  verbose = FALSE
+)
+```
+
+Added cell identity
+```{r}
+seurat_ptr_tenx_batch1$cell_type <- cell_identity[Cells(seurat_ptr_tenx_batch1), "Cluster"]
+seurat_ptr_tenx_batch1$cell_type[is.na(seurat_ptr_tenx_batch1$cell_type)] <- 12
+```
+
+Plot
+```{r}
+png(sprintf("%s/%s", path_output, "umap.png"), height = 1600, width = 1600, res = 300)
+Idents(seurat_ptr_tenx_batch1) <- "cell_type"
+DimPlot(
+  seurat_ptr_tenx_batch1,
+  reduction = "umap",
+  pt.size = 0.5,
+  cols = cluster_colors,
+  label = FALSE,
+) + NoAxes() + NoLegend()
+dev.off()
+```
+Plot expression of genes with missense mutation validated by proteome
+```{r}
+png(sprintf("%s/%s", path_output, "gene_expression.png"), height = 2000, width = 2000, res = 100)
+FeaturePlot(
+  seurat_ptr_tenx_batch1, 
+  features = validated_missense,
+  order = TRUE,
+  pt.size = 0.01,
+  ncol = 6,
+  label = FALSE,
+)
+dev.off()
+```
+
+Plot editing level of the missense sites
+```{r}
+alt_mtx <- alt_mtx[validated_sites,] %>% as.matrix()
+ref_mtx <- ref_mtx[validated_sites,] %>% as.matrix()
+cov_mtx <- alt_mtx + ref_mtx
+alt_frac <- alt_mtx / cov_mtx
+alt_frac[is.na(alt_frac)] <- 0
+alt_frac[cov_mtx < 5] <- 0
+# filter by coverage?
+metadata_alt_frac <- alt_frac[,Cells(seurat_ptr_tenx_batch1)] %>%
+  t %>% as.data.frame()
+colnames(metadata_alt_frac) <- mapply(
+  function(a,b){paste(a,b)},
+  validated_missense,
+  validated_sites
+)
+metadata_alt_frac <- metadata_alt_frac[,colSums(metadata_alt_frac) > 0]
+seurat_ptr_tenx_batch1 <- AddMetaData(seurat_ptr_tenx_batch1, metadata_alt_frac)
+```
+
+```{r}
+# temp <- data.frame(
+#   cellranger_count=seurat_ptr_tenx_batch1@assays$RNA$counts["Potri.001G278500.v4.1", Cells(seurat_ptr_tenx_batch1)],
+#   vartrix=cov_mtx["Chr01:29185246", Cells(seurat_ptr_tenx_batch1)]
+# )
+```
+
+```{r}
+for (n in 1:ncol(metadata_alt_frac)) {
+  Idents(seurat_ptr_tenx_batch1) <- colnames(metadata_alt_frac)[n]
+  svg(
+    sprintf(
+      "%s/editing_level/%s.svg",
+      path_output, 
+      colnames(metadata_alt_frac)[n] %>% sub(":", "-", .)
+    ), 
+    height = 6, 
+    width = 8
+  )
+  p <- DimPlot(
+    seurat_ptr_tenx_batch1,
+    reduction = "umap",
+    pt.size = 1,
+    label = FALSE,
+  ) + NoAxes()
+  print(p)
+  dev.off()
+}
+```
+
+

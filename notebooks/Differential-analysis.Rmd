@@ -15,9 +15,9 @@ library(Matrix)
 library(data.table)
 library(ggplot2)
 library(magrittr)
-library(doParallel)
-library(foreach)
-setDTthreads(threads = 60)
+# library(doParallel)
+# library(foreach)
+# setDTthreads(threads = 60)
 ```
 
 
@@ -100,7 +100,7 @@ barplot(
 ```
 ## Show GE cluster colors
 ```{r}
-color_ge <- ge_cluster[, c("Cluster", "Color")] %>% unique()
+color_ge <- ge_cluster_4870[, c("Cluster", "Color")] %>% unique()
 color_ge <- color_ge[order(color_ge$Cluster), ]
 # Base R color bar
 barplot(
@@ -154,15 +154,13 @@ hist(
 dev.off()
 ```
 
-
-
 ## Test for differential editing using REDITs
 ```{r}
-cond1_clusters <- c(7)
-cond2_clusters <- c(1)
-cond1_label <- "Fiber"
-cond2_label <- "Vessel"
-fill_manual <- c("Fiber" = "red", "Vessel" = "blue")
+cond1_clusters <- c(3)
+cond2_clusters <- c(1,2,4,5,6,7,8)
+cond1_label <- "RO"
+cond2_label <- "Others"
+fill_manual <- c("RO" = "red", "Others" = "blue")
 
 # this data.table store differential analysis results
 da_results <- data.table(
@@ -259,6 +257,14 @@ for (nth_row in 1:nrow(to_plot)) {
     print(p)
     dev.off()
 }
+
+# write DRE test results to CSV
+write.csv(
+  da_results[p_adj < 0.05],
+  sprintf("%s/DRES_%s_vs_%s.csv", path_output, cond1_label, cond2_label),
+  quote = FALSE,
+  row.names = FALSE
+)
 ```
 
 
