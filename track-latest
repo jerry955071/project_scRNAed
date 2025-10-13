@@ -1,5 +1,0 @@
-#!/bin/bash
-
-latest=$(ls -lR --sort=t -r nohup-out | tail -n1 | awk '{print $NF}')
-full_path=$(find nohup-out -name $latest)
-tail -f $full_path
