@@ -12,14 +12,14 @@
 configfile: "configs/config.json"
 
 # include sub-workflows
-include: "Utilities.smk"
-include: "CellRanger.smk"
-include: "Remapping.smk"
-include: "VariantCalling.smk"
-include: "VariantCalling-DNA-GATK.smk"
-include: "LCM-RNA-editing.smk"
-include: "Bulk-scRNA-editing.smk"
-include: "VariantAnnotation.smk"
+include: "workflows/Utilities.smk"
+include: "workflows/CellRanger.smk"
+include: "workflows/Remapping.smk"
+include: "workflows/VariantCalling.smk"
+include: "workflows/VariantCalling-DNA-GATK.smk"
+include: "workflows/LCM-RNA-editing.smk"
+include: "workflows/Bulk-scRNA-editing.smk"
+include: "workflows/VariantAnnotation.smk"
 
 # Custom functions used by all workflows
 from typing import List
