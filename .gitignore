@@ -8,3 +8,6 @@ logs/*
 .snakemake
 rawdata/*
 .vscode/*
+external_data/*
+src/bcftools-1.22/*
+notebooks/.ipynb_checkpoints/*
