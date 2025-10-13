@@ -88,8 +88,7 @@ rule gatk_create_seq_dict:
 # === 3. HaplotypeCaller (GVCF mode) ===
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/30332006386459-HaplotypeCaller
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/360035531532-HaplotypeCaller-Reference-Confidence-Model-GVCF-mode
-# TODO: target loci will be merged per species
-target_loci = {
+RNA_SNV_LOCI = {
     "ptr": "outputs/VariantCalling/ptr/snv.loci.list",
     "egr": "outputs/VariantCalling/egr/snv.loci.list"
 }
@@ -98,7 +97,7 @@ rule gatk_haplotypecaller:
         bam="outputs/VariantCalling-DNA/gatk_markduplicates/{sample}.sorted.addrg.markdup.bam",
         reference=lambda wildcards: get_assembly_by_sample_name(wildcards.sample),
         reference_dict=lambda wildcards: get_assembly_by_sample_name(wildcards.sample).replace(".fa", ".dict"),
-        intervals=lambda wildcards: target_loci[query(config["samples-dna"], "name", wildcards.sample)["species"]]
+        intervals=lambda wildcards: RNA_SNV_LOCI[query(config["samples-dna"], "name", wildcards.sample)["species"]]
     output:
         gvcf="outputs/VariantCalling-DNA/gatk_gvcf/{sample}.g.vcf.gz"
     log:
@@ -117,47 +116,38 @@ rule gatk_haplotypecaller:
 
 # === 4. GenomicsDBImport (combine GVCFs) ===
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/30332006200603-GenomicsDBImport
-# TODO: try remove -L; remove rule 'create_interval_list' if is faster
 rule gatk_genomicsdbimport:
-    threads: 32
+    threads: 22
     input:
         gvcfs=lambda wildcards: [
-            "outputs/VariantCalling-DNA/gatk_gvcf/%s.g.vcf.gz" % query_all(
+            "outputs/VariantCalling-DNA/gatk_gvcf/%s.g.vcf.gz" % i for i in query_all(
                 d=config["samples-dna"],
                 k="species",
                 v=wildcards.species,
                 k_out="name"
             )
         ],
-        intervals="outputs/VariantCalling-DNA/{species}/intervals.list"
+        intervals=lambda wildcards: RNA_SNV_LOCI[wildcards.species]
     output:
-        db_dir=directory("outputs/VariantCalling-DNA/gatk_joint/{species}/db")
+        db_dir=directory("outputs/VariantCalling-DNA/gatk_joint/{species}/db"),
+        tmp_dir=temp(directory("outputs/VariantCalling-DNA/gatk_joint/{species}/temp"))
     log:
         "logs/VariantCalling-DNA/gatk_joint/{species}/genomicsdb.log"
     params:
         variant_flags=lambda wildcards, input: " ".join(f"--variant {f}" for f in input.gvcfs),
     shell:
         """
+        mkdir -p {output.tmp_dir}
         docker run {docker_mount} --rm -u $(id -u) broadinstitute/gatk:4.6.1.0 \
             gatk --java-options "-Xmx4g" GenomicsDBImport \
                 --genomicsdb-workspace-path {output.db_dir} \
                 --batch-size 50 \
-                -L {input.intervals} \
                 --reader-threads {threads} \
+                -L {input.intervals} \
+                --merge-input-intervals \
+                --tmp-dir {output.tmp_dir} \
                 {params.variant_flags} \
             > {log} 2>&1
-        """
-
-rule create_intervals_list:
-    input:
-        lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"] + ".fai"
-    output:
-        "outputs/VariantCalling-DNA/{species}/intervals.list"
-    log:
-        "logs/VariantCalling-DNA/gatk_joint/create_intervals_list/{species}.log"
-    shell:
-        """
-        cat {input} | awk '{{print $1}}' > {output}
         """
 
 # === 5. GenotypeGVCFs (joint genotyping) ===
@@ -165,10 +155,7 @@ rule gatk_genotypegvcfs:
     input:
         db_dir="outputs/VariantCalling-DNA/gatk_joint/{species}/db",
         reference=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
-        intervals=lambda wildcards: {
-            "ptr": "outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.list",
-            "egr": "outputs/VariantCalling/vawk/egr_tenx_batch1.snv.loci.list"
-        }[wildcards.species]
+        intervals=lambda wildcards: RNA_SNV_LOCI[wildcards.species]
     output:
         vcf="outputs/VariantCalling-DNA/gatk_joint/{species}.raw.vcf.gz"
     log:
@@ -241,7 +228,6 @@ rule gatk_variant_filtration:
 #         """
 
 # ==== 8. Find no-variant sites ====
-# TODO: add output snp.vcf
 rule categorize_sites:
     input:
         ref=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
