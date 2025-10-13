@@ -1,28 +1,8 @@
-# Snakemake setups
-configfile: "configs/config.json"
 wildcard_constraints:
     sample="|".join([i["name"] for i in config["samples"]]),
     species="|".join([i["species"] for i in config["references"]]),
-    random_seed="[0-9]+",
-    gff_ext="gff|gff3"
 
-# set docker mount points
-docker_mount = ""
-for volume in config["volumes"]:
-    docker_mount += "-v %s:%s:%s " % (
-        volume["host"],
-        volume["container"],
-        volume["mode"]
-    )
-    if volume["is_workspace"]:
-        docker_mount += "-w %s " % volume["container"]
-
-# ================= Custom functions =================
-# get_ref_by_sample: get reference genome for sample (used in minimap2 rule)
-def get_ref_by_sample(wildcards):
-    species = query(config["samples"], "name", wildcards.sample)["species"]
-    return query(config["references"], "species", species)["assembly"]
-
+# ================= workflow specific functions =================
 # call_chromosomes_vcf_by_sample: call for vcf files per chromosome (used in bcftools_concat rule)
 def call_chromosomes_vcf_gz_by_sample(wildcards):
     species = query(config["samples"], "name", wildcards.sample)["species"]
@@ -38,7 +18,7 @@ rule freebayes_by_chromosome:
     input:
         minitagged_sorted_bam="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam",
         minitagged_sorted_bam_bai="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam.bai",
-        reference_fasta=get_ref_by_sample
+        reference_fasta=lambda wildcards: _genome_assembly(wildcards)
     output:
         vcf="outputs/VariantCalling/freebayes/{sample}/{chromosome}.vcf"
     log:
@@ -126,7 +106,7 @@ rule vartrix:
         bai="outputs/Remapping/samtools/{sample}/minitagged_sorted.bam.bai",
         barcodes="outputs/Remapping/renamer/{sample}/barcodes.tsv",
         vcf="outputs/VariantCalling/bcftools_concat/{sample}.vcf",
-        fasta=get_ref_by_sample
+        fasta=lambda wildcards: _genome_assembly(wildcards)
     output:
         ref_matrix="outputs/VariantCalling/vartrix/{sample}/ref.mtx",
         alt_matrix="outputs/VariantCalling/vartrix/{sample}/alt.mtx"

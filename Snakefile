@@ -12,65 +12,108 @@
 configfile: "configs/config.json"
 
 # include sub-workflows
+include: "Utilities.smk"
 include: "CellRanger.smk"
 include: "Remapping.smk"
 include: "VariantCalling.smk"
-# include: "VariantCalling-DNA.smk"
-# include: "VariantCalling-DNA-Freebayes-by-sample.smk"
 include: "VariantCalling-DNA-GATK.smk"
 include: "LCM-RNA-editing.smk"
 include: "Bulk-scRNA-editing.smk"
+include: "VariantAnnotation.smk"
 
-# ===== Custom functions used by all workflows =====
-# query: query from list of dict by key-value pair
+# Custom functions used by all workflows
 from typing import List
 def query(d:List[dict], k:str, v:str) -> dict:
+    """Return the first dictionary in a list of dictionaries where the value of key k matches v."""
     return [x for x in d if x[k] == v][0]
 
-# query_all: query from list of dict by key-value pair 
-# return values from the requested field
 def query_all(d:List[dict], k:str, v:str, k_out:str) -> List[str]:
+    """Return a list of values from key k_out in a list of dictionaries where the value of key k matches v."""
     return [x[k_out] for x in d if x[k] == v]
-# =================================================
+
+def _genome_assembly(wildcards):
+    """Get genome assembly file path by sample name"""
+    species = query(
+        config["samples"] + \
+        config["samples-dna"] + \
+        config["samples-lcm"], 
+        "name", 
+        wildcards.sample
+    )["species"]
+    return query(config["references"], "species", species)["assembly"]
+
+# wildcard constraints
+wildcard_constraints:
+    sample="|".join([i["name"] for i in config["samples"]]),
+    species="|".join([i["species"] for i in config["references"]]),
 
 
-# call for output files
+# set docker mount points
+docker_mount = ""
+for volume in config["volumes"]:
+    docker_mount += "-v %s:%s:%s " % (
+        volume["host"],
+        volume["container"],
+        volume["mode"]
+    )
+    if volume["is_workspace"]:
+        docker_mount += "-w %s " % volume["container"]
+
+
+# rules
+rule all:
+    input:
+        "outputs/Snakefile/VariantCalling/done.txt",
+        "outputs/Snakefile/VariantCalling-DNA-GATK/done.txt",
+        "outputs/Snakefile/LCM-RNA-editing/done.txt"
+
+
+# call scRNA polymorphism per single-cell samples
+SC_SAMPLES = [i["name"] for i in config["samples"]]
 rule VariantCalling:
     input:
         alt_mtx=expand(
             "outputs/VariantCalling/vartrix/{sample}/alt.mtx",
-            sample=[i["name"] for i in config["samples"]]
+            sample=SC_SAMPLES
         ),
         ref_mtx=expand(
             "outputs/VariantCalling/vartrix/{sample}/ref.mtx",
-            sample=[i["name"] for i in config["samples"]]
+            sample=SC_SAMPLES
         ),
         snv_loci=expand(
             "outputs/VariantCalling/vawk/{sample}.snv.loci.txt",
-            sample=[i["name"] for i in config["samples"]]
+            sample=SC_SAMPLES
         ),
         barcodes=expand(
             "outputs/Remapping/renamer/{sample}/barcodes.tsv",
-            sample=[i["name"] for i in config["samples"]]
+            sample=SC_SAMPLES
         )
+    output:
+        "outputs/Snakefile/VariantCalling/done.txt"
+    shell:
+        """
+        echo date +%Y-%m-%d_%H:%M:%S > {output}
+        echo Created files: >> {output}
+        echo {input} >> {output}
+        """
 
-rule VariantCalling_DNA_GATK_egr:
+# perform genotyping (mostly for identifying homozygous sites) at scRNA polymorphic sites per species
+rule VariantCalling_DNA_GATK:
     input:
-        hom_alt="outputs/VariantCalling-DNA/gatk_joint/egr/hom_alt.vcf",
-        hom_ref="outputs/VariantCalling-DNA/gatk_joint/egr/hom_ref.vcf",
-        het="outputs/VariantCalling-DNA/gatk_joint/egr/het.vcf",
-        snp="outputs/VariantCalling-DNA/gatk_joint/egr/snp.vcf",
+        "outputs/VariantCalling-DNA/gatk_joint/ptr/hom_ref.vcf",
+        "outputs/VariantCalling-DNA/gatk_joint/egr/hom_ref.vcf"
+    output:
+        "outputs/Snakefile/VariantCalling-DNA-GATK/done.txt"
+    shell:
+        """
+        echo date +%Y-%m-%d_%H:%M:%S > {output}
+        echo Created files: >> {output}
+        echo {input} >> {output}
+        """
 
 
-rule ptr_tenx_batch1:
-    input:
-        alt_mtx="outputs/VariantCalling/vartrix/ptr_tenx_batch1/alt.mtx",
-        ref_mtx="outputs/VariantCalling/vartrix/ptr_tenx_batch1/ref.mtx",
-        snv_loci="outputs/VariantCalling/vawk/ptr_tenx_batch1.snv.loci.txt",
-        barcodes="outputs/Remapping/renamer/ptr_tenx_batch1/barcodes.tsv",
-        gatk_output="outputs/VariantCalling-DNA/gatk_joint/Ptr.filtered.vcf.gz"
-
-rule lcm_rna_editing:
+# characterize RNA editing profile of fiber, vessel, and ray cells
+rule LCM_RNA_editing:
     input:
         expand(
             "outputs/LCM-RNA-editing/subset-reditable/{sample}-subset.tsv",
@@ -86,45 +129,15 @@ rule lcm_rna_editing:
                 "ray-rep3"
             ]
         )
-        
-rule categorized_sites:
-    input:
-        hom_alt="outputs/VariantCalling-DNA/gatk_joint/hom_alt.vcf",
-        hom_ref="outputs/VariantCalling-DNA/gatk_joint/hom_ref.vcf",
-        het="outputs/VariantCalling-DNA/gatk_joint/het.vcf",
-        snp="outputs/VariantCalling-DNA/gatk_joint/snp.vcf"
-
-
-
-# all-purpose rules
-# =========================================================
-rule samtools_index_any:
-    input:
-        "{any}.bam"
     output:
-        "{any}.bam.bai"
-    log:
-        "logs/Snakefile/samtools_index/{any}.bam.log"
+        "outputs/Snakefile/LCM-RNA-editing/done.txt"
     shell:
-        "samtools index {input} 1> {log} 2> {log}"
+        """
+        echo date +%Y-%m-%d_%H:%M:%S > {output}
+        echo Created files: >> {output}
+        echo {input} >> {output}
+        """
+        
 
 
-# NOTE: This rule is confusing Snakemake, and I forget when it was used. Thus commented until needed.
-# rule bgzip:
-#     input:
-#         "{file}"
-#     output:
-#         "{file}.gz"
-#     log:
-#         "logs/gzip/{file}.log"
-#     shell:
-#         """
-#         docker run \
-#             {docker_mount} \
-#             -u $(id -u) \
-#             --rm \
-#             staphb/htslib:1.21 \
-#                 bgzip -c {input} \
-#             1> {output} \
-#             2> {log}
-#         """
+

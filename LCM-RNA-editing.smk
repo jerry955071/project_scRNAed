@@ -37,22 +37,6 @@ def get_fastq_by_sample(wildcards):
 # 3. Annotate RNA.tsv with DNA.tsv
 # 
 # We only run step 1 because we've done variant calling with DNA data
-rule all:
-    input:
-        expand(
-            "outputs/LCM-RNA-editing/subset-reditable/{sample}-subset.tsv",
-            sample=[
-                "fiber-rep1",
-                "fiber-rep2",
-                "fiber-rep3",
-                "vessel-rep1",
-                "vessel-rep2",
-                "vessel-rep3",
-                "ray-rep1",
-                "ray-rep2",
-                "ray-rep3"
-            ]
-        )
 
 # ==== 0. Pre-process FASTQ files ====
 rule fastp:

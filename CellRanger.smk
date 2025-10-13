@@ -1,28 +1,4 @@
-# Snakemake setups
-configfile: "configs/config.json"
-wildcard_constraints:
-    sample="|".join([i["name"] for i in config["samples"]]),
-    species="|".join([i["species"] for i in config["references"]]),
-    random_seed="[0-9]+",
-    gff_ext="gff|gff3"
-
-# set docker mount points
-docker_mount = ""
-for volume in config["volumes"]:
-    docker_mount += "-v %s:%s:%s " % (
-        volume["host"],
-        volume["container"],
-        volume["mode"]
-    )
-    if volume["is_workspace"]:
-        docker_mount += "-w %s " % volume["container"]
-
 # ================= Custom functions =================
-# query: query from list of dict by key-value pair
-from typing import List
-def query(d:List[dict], k:str, v:str) -> dict:
-    return [x for x in d if x[k] == v][0]
-
 # set_sample_names_param (used in CellRanger_count)
 def set_sample_names_param(wildcards):
     sample = query(config["samples"], "name", wildcards.sample)

@@ -1,30 +1,10 @@
 # Reference: https://gatk.broadinstitute.org/hc/en-us/articles/360035890411-Calling-variants-on-cohorts-of-samples-using-the-HaplotypeCaller-in-GVCF-mode
-# Snakemake setups
-configfile: "configs/config.json"
+
+# wildcard constraints
 wildcard_constraints:
     sample="|".join([i["name"] for i in config["samples-dna"]]),
     species="|".join([i["species"] for i in config["references"]]),
-    random_seed="[0-9]+",
-    gff_ext="gff|gff3"
 
-# set docker mount points
-docker_mount = ""
-for volume in config["volumes"]:
-    docker_mount += "-v %s:%s:%s " % (
-        volume["host"],
-        volume["container"],
-        volume["mode"]
-    )
-    if volume["is_workspace"]:
-        docker_mount += "-w %s " % volume["container"]
-
-
-# ================= Custom functions =================
-# get_assembly: get assembly file path by species
-def get_assembly_by_sample_name(sample_name:str) -> str:
-    species = query(config["samples-dna"], "name", sample_name)["species"]
-    assembly = query(config["references"], "species", species)["assembly"]
-    return assembly
 
 # === 1. Add read group ===
 rule gatk_addreplacerg:
@@ -95,8 +75,8 @@ RNA_SNV_LOCI = {
 rule gatk_haplotypecaller:
     input:
         bam="outputs/VariantCalling-DNA/gatk_markduplicates/{sample}.sorted.addrg.markdup.bam",
-        reference=lambda wildcards: get_assembly_by_sample_name(wildcards.sample),
-        reference_dict=lambda wildcards: get_assembly_by_sample_name(wildcards.sample).replace(".fa", ".dict"),
+        reference=lambda wildcards: _genome_assembly(wildcards),
+        reference_dict=lambda wildcards: _genome_assembly(wildcards).replace(".fa", ".dict"),
         intervals=lambda wildcards: RNA_SNV_LOCI[query(config["samples-dna"], "name", wildcards.sample)["species"]]
     output:
         gvcf="outputs/VariantCalling-DNA/gatk_gvcf/{sample}.g.vcf.gz"
