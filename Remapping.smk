@@ -80,8 +80,9 @@ rule minimap2:
                     -ax splice -t {threads} -G50k -k 21 -w 11 --sr \
                     -A2 -B8 -O12,32 -E2,1 -r200 -p.5 -N20 -f1000,5000 \
                     -n2 -m20 -s40 -g2000 -2K50m --secondary=no \
+                    -o {output.sam} \
                     {input.ref} {input.fq} \
-                1> {output.sam} \
+                1> {log} \
                 2> {log}
         """
 
