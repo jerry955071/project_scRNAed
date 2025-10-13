@@ -213,12 +213,11 @@ rule vawk_parse_vcf_to_bed:
         """
 
 # ==== Get RNA variant sites per species ====
-# TODO: finish this rule
-rule bedtools_merge:
+rule get_snv_sites_per_species:
     input:
-        bed=expand(
+        bed=lambda wildcards: expand(
             "outputs/VariantCalling/vawk/{sample}.snv.loci.bed",
-            sample=lambda wildcards: query_all(
+            sample=query_all(
                 d=config["samples"],
                 k="species",
                 v=wildcards.species,
@@ -226,8 +225,6 @@ rule bedtools_merge:
             )
         )
     output:
-        tmp=temp("outputs/VariantCalling/{species}/snv.loci.bed-tmp"),
-        merged_bed="outputs/VariantCalling/{species}/snv.loci.bed",
         merged_list="outputs/VariantCalling/{species}/snv.loci.list"
     log:
         "logs/VariantCalling/bedtools/merge/{species}.log"
@@ -236,18 +233,8 @@ rule bedtools_merge:
         # cat and sort bed records
         cat {input.bed} \
             | sort -k1,1 -k2,2n \
-            1> {output.tmp} \
-            2> {log}
-
-        # bedtools-merge
-        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
-            bcftools merge -i {output.tmp} \
-            1> {output.merged_bed} \
-            2>> {log}
-
-        # parse bed format into list format for GATK
-        cat {output_merged_bed} \
-            | awk '{{print $1":"$2"-"$3}}' \
+            | uniq \
+            | awk '{{print $1":"$2"-"$2}}' \
             1> {output.merged_list} \
-            2>> {log}
+            2> {log}
         """
