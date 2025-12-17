@@ -11,7 +11,7 @@ rule renamer:
         barcodes_gz="outputs/CellRanger/count/{sample}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz"
     output:
         barcodes="outputs/Remapping/renamer/{sample}/barcodes.tsv",
-        fq="outputs/Remapping/renamer/{sample}/fq.fq"
+        fq=temp("outputs/Remapping/renamer/{sample}/fq.fq")
     log:
         "logs/Remapping/renamer/{sample}.log"
     shell:
@@ -40,7 +40,7 @@ rule minimap2:
         ref=lambda wildcards: _genome_assembly(wildcards),
         fq="outputs/Remapping/renamer/{sample}/fq.fq"
     output:
-        sam="outputs/Remapping/minimap2/{sample}/minimap.sam"
+        sam=temp("outputs/Remapping/minimap2/{sample}/minimap.sam")
     log:
         "logs/Remapping/minimap2/{sample}.log"
     shell:
