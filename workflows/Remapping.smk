@@ -65,7 +65,7 @@ rule retag:
     input:
         sam="outputs/Remapping/minimap2/{sample}/minimap.sam"
     output:
-        tagged_bam="outputs/Remapping/retag/{sample}/minitagged.bam"
+        tagged_bam=temp("outputs/Remapping/retag/{sample}/minitagged.bam")
     log:
         "logs/Remapping/retag/{sample}.log"
     shell:
