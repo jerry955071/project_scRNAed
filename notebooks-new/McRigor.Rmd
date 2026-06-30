@@ -1,0 +1,70 @@
+# Filtering metacells
+
+## Setup
+
+Library
+
+```{r}
+library(Seurat)
+library(mcRigor)
+library(magrittr)
+```
+
+Vars
+
+```{r}
+path_mc_label_dir <- "outputs/notebooks-new/MetaCell"
+sample_names <- c(
+  "ptr_tenx_tso2",
+  "ptr_tenx_tso3",
+  "ptr_tenx_tso4",
+  "ptr_tenx_tst2",
+  "ptr_tenx_tst3",
+  "ptr_tenx_tst4",
+  "ptr_tenx_tsv2",
+  "ptr_tenx_tsv3",
+  "ptr_tenx_tsv4",
+  "ptr_tenx_tsv5",
+  "ptr_tenx_batch2"
+)
+func_path_10x_matrix <- function(sample_names) {
+  sprintf(
+    "outputs/CellRanger/count/%s/outs/filtered_feature_bc_matrix",
+    sample_names
+)
+}
+func_path_memberships <-function(sample_name) {
+  sprintf(
+    "outputs/notebooks-new/MetaCell/%s.csv",
+    sample_name
+  ) 
+}
+```
+
+Filter metacells
+
+```{r}
+for (sample_name in sample_names) {
+  obj_singlecell <- func_path_10x_matrix(sample_name) %>% 
+    Read10X %>% CreateSeuratObject
+  cell_membership <- read.csv(
+    func_path_memberships(sample_name),
+    header = TRUE,
+    row.names = 1
+  )
+  colnames(cell_membership) <- c("0")
+  detect_res = mcRigor_DETECT(
+    obj_singlecell = obj_singlecell, 
+    cell_membership = cell_membership,
+    tgamma = NULL,
+    assay_type = 'RNA',
+    feature_use = 2000,
+    aggregate_method = 'mean',
+    Nrep = 1,
+    test_cutoff = 0.05,
+    thre_smooth = TRUE,
+    thre_bw = 1/6
+  )
+  print(sample_name)
+}
+```
