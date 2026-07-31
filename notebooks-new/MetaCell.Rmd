@@ -1,20 +1,28 @@
 ---
 params:
-  sample_name: ptr_tenx_tso3
-  alpha: 1
-  K: 50
+  sample_name: ptr_tenx_tsv2
+  alpha: 2
+  K: 100
+  path_mcdb: str
+  path_figs: str
+  path_10x: str
+  path_output: str
+  path_mc_label: str
 ---
 
-```{r, setup, include=FALSE}
-# set this option in the first code chunk in the document
-knitr::opts_chunk$set(echo = params$sample_name)
-```
+# ```{r, setup, include=FALSE}
+# # set this option in the first code chunk in the document
+# knitr::opts_chunk$set(
+#   echo = params$sample_name,
+#   root.dir = "/home/rstudio/local"
+# )
+# ```
 
 # Metacell analysis
 
 Library metacell
 
-```{r}
+```{r Library metacell}
 library(metacell)
 library(magrittr)
 library(R.utils)
@@ -22,57 +30,32 @@ library(R.utils)
 
 ## Setup
 
-```{r}
-path_mcdb <- sprintf("outputs/notebooks-new/MetaCell/mcdb/%s", params$sample_name)
-path_figs <- sprintf("outputs/notebooks-new/MetaCell/figs/%s", params$sample_name)
-path_mc_label_dir <- "outputs/notebooks-new/MetaCell"
-# sample_names <- c(
-#   "ptr_tenx_tso2",
-#   "ptr_tenx_tso3",
-#   "ptr_tenx_tso4",
-#   "ptr_tenx_tst2",
-#   "ptr_tenx_tst3",
-#   "ptr_tenx_tst4",
-#   "ptr_tenx_tsv2",
-#   "ptr_tenx_tsv3",
-#   "ptr_tenx_tsv4",
-#   "ptr_tenx_tsv5",
-#   "ptr_tenx_batch2"
-# )
-# paths_10x_matrix <- sapply(
-#   sample_names,
-#   function(x){
-#     sprintf("outputs/CellRanger/count/%s/outs/filtered_feature_bc_matrix", x)
-#   }
-# )
-func_path_10x_matrix <- function(sample_name) {
-  sprintf("outputs/CellRanger/count/%s/outs/filtered_feature_bc_matrix", sample_name)
-}
+```{r Setup}
+sample_name <- params$sample_name
+alpha <- params$alpha %>% as.numeric
+K <- params$K %>% as.numeric
+path_mcdb <- params$path_mcdb
+path_figs <- params$path_figs
+path_10x <- params$path_10x
+path_output <- params$path_output
+path_mc_label <- params$path_mc_label
 ```
 
 Initiate MetaCell DB
 
-```{r}
+```{r scdb_init}
 dir.create(path_mcdb, recursive = TRUE)
 scdb_init(path_mcdb, force_reinit = TRUE)
 ```
 
-Process sample N
-
-```{r}
-# idx <- params$sample_idx
-# sample_name <- names(paths_10x_matrix)[idx]
-sample_name <- params$sample_name
-```
-
 Load 10x matrix
 
-```{r}
+```{r mcell_import_scmat_10x}
 temp_files <- sapply(
   c(
-    file.path(func_path_10x_matrix(sample_name), "barcodes.tsv.gz"),
-    file.path(func_path_10x_matrix(sample_name), "features.tsv.gz"), 
-    file.path(func_path_10x_matrix(sample_name), "matrix.mtx.gz")
+    file.path(path_10x, "barcodes.tsv.gz"),
+    file.path(path_10x, "features.tsv.gz"), 
+    file.path(path_10x, "matrix.mtx.gz")
   ),
   FUN = gunzip,
   remove = FALSE,
@@ -92,20 +75,20 @@ print(dim(mat@mat))
 
 Initiate MetaCell fig directory
 
-```{r}
+```{r scfigs_init}
 dir.create(path_figs, recursive = TRUE)
 scfigs_init(path_figs)
 ```
 
 Show UMI distribution
 
-```{r}
+```{r mcell_plot_umis_per_cell}
 mcell_plot_umis_per_cell(sample_name)
 ```
 
 ## Selecting feature genes
 
-```{r}
+```{r mcell_add_gene_stat}
 mcell_add_gene_stat(
   gstat_id = sample_name, 
   mat_id = sample_name, 
@@ -115,7 +98,7 @@ mcell_add_gene_stat(
 
 Create a gset object
 
-```{r}
+```{r mcell_gset_filter_varmean}
 mcell_gset_filter_varmean(
   gset_id = sprintf("%s_feats", sample_name), 
   gstat_id = sample_name, 
@@ -132,7 +115,7 @@ mcell_gset_filter_cov(
 
 Variance-mean plot
 
-```{r}
+```{r mcell_plot_gstats}
 mcell_plot_gstats(
   gstat_id = sample_name, 
   gset_id = sprintf("%s_feats", sample_name)
@@ -141,19 +124,19 @@ mcell_plot_gstats(
 
 ## Building the balanced cell graph
 
-```{r}
+```{r mcell_add_cgraph_from_mat_bknn}
 mcell_add_cgraph_from_mat_bknn(
   mat_id = sample_name, 
   gset_id = sprintf("%s_feats", sample_name), 
   graph_id = sprintf("%s_graph", sample_name),
-  K = params$K,
+  K = 100,
   dsamp = T
 )
 ```
 
 ## Resampling and generating the co-clustering graph
 
-```{r}
+```{r mcell_coclust_from_graph_resamp}
 mcell_coclust_from_graph_resamp(
   coc_id = sprintf("%s_coc500", sample_name), 
   graph_id = sprintf("%s_graph", sample_name),
@@ -163,14 +146,14 @@ mcell_coclust_from_graph_resamp(
 )
 ```
 
-```{r}
+```{r mcell_mc_from_coclust_balanced}
 mcell_mc_from_coclust_balanced(
   coc_id = sprintf("%s_coc500", sample_name), 
   mat_id = sample_name,
   mc_id = sprintf("%s_mc", sample_name), 
-  K=30, 
+  K = K, 
   min_mc_size = 30,
-  alpha = params$alpha
+  alpha = alpha
 )
 ```
 
@@ -178,7 +161,7 @@ mcell_mc_from_coclust_balanced(
 
 Skipped this step and check for dubious MetaCells using mcRigor
 
-```{r}
+```{r mcell_mc_split_filt}
 mcell_mc_split_filt(
   new_mc_id = sprintf("%s_mc_f", sample_name),
   mc_id = sprintf("%s_mc", sample_name),
@@ -190,7 +173,7 @@ mcell_mc_split_filt(
 
 ## Selecting markers and coloring metacells
 
-```{r}
+```{r mcell_gset_from_mc_markers}
 mcell_gset_from_mc_markers(
    gset_id = sprintf("%s_markers", sample_name),
    mc_id = sprintf("%s_mc", sample_name)
@@ -199,7 +182,7 @@ mcell_gset_from_mc_markers(
 
 Plot marker gene heatmap
 
-```{r}
+```{r mcell_mc_plot_marks}
 mcell_mc_plot_marks(
   mc_id = sprintf("%s_mc", sample_name),
   gset_id =sprintf("%s_markers", sample_name),
@@ -210,7 +193,7 @@ mc_colorize_default(sprintf("%s_mc", sample_name))
 
 Plot MetaCell graph
 
-```{r}
+```{r mcell_mc2d_force_knn}
 mcell_mc2d_force_knn(
   mc2d_id = sprintf("%s_2dproj", sample_name),
   mc_id = sprintf("%s_mc", sample_name),
@@ -223,12 +206,9 @@ mcell_mc2d_plot(mc2d_id=sprintf("%s_2dproj", sample_name))
 
 ## Export MetaCell label
 
-```{r}
+```{r export}
 mc <- scdb_mc(sprintf("%s_mc_f", sample_name))
 mc_label <- mc@mc %>% as.data.frame
-colnames(mc_label) <- as.character(params$alpha)
-write.csv(
-  mc_label,
-  file.path(path_mc_label_dir, sprintf("%s_%s_%s.csv", sample_name, params$K, params$alpha))
-)
+colnames(mc_label) <- as.character(K)
+write.csv(mc_label, path_mc_label)
 ```
