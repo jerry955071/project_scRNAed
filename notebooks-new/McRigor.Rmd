@@ -1,70 +1,160 @@
+---
+params:
+  sample_name: ptr_tenx_tsv4
+  Ks: 30 40 50 60 70
+  alphas: 0.6 0.8 1 1.2
+  path_output: str
+---
+
 # Filtering metacells
 
 ## Setup
 
-Library
+### Library
 
-```{r}
+```{r Library}
 library(Seurat)
 library(mcRigor)
 library(magrittr)
+library(dplyr)
+library(tibble)
+library(stringr)
+library(glue)
 ```
 
-Vars
+### Parse markdown parameters
 
-```{r}
-path_mc_label_dir <- "outputs/notebooks-new/MetaCell"
-sample_names <- c(
-  "ptr_tenx_tso2",
-  "ptr_tenx_tso3",
-  "ptr_tenx_tso4",
-  "ptr_tenx_tst2",
-  "ptr_tenx_tst3",
-  "ptr_tenx_tst4",
-  "ptr_tenx_tsv2",
-  "ptr_tenx_tsv3",
-  "ptr_tenx_tsv4",
-  "ptr_tenx_tsv5",
-  "ptr_tenx_batch2"
-)
+```{r Parse markdown parameters}
+sample_name <- params$sample_name
+Ks <- strsplit(params$Ks, " ") %>% unlist
+alphas <- strsplit(params$alphas, " ") %>% unlist
+path_output <- params$path_output
+```
+
+### Vars
+
+```{r Vars}
+path_mc_label_template <- "outputs/MetaCell/{sample}/K={K}/alpha={alpha}/metacell.csv"
+path_mc_label_out <- file.path(path_output, "metacell.csv")
+path_mc_score_plot <- file.path(path_output, "optim_plot.png")
+path_opt_res <- file.path(path_output, "optimize_res.rds")
+dir.create(path_output, recursive = TRUE)
+# sample_names <- c(
+#   "ptr_tenx_tso2",
+#   "ptr_tenx_tso3",
+#   "ptr_tenx_tso4",
+#   "ptr_tenx_tst2",
+#   "ptr_tenx_tst3",
+#   "ptr_tenx_tst4",
+#   "ptr_tenx_tsv2",
+#   "ptr_tenx_tsv3",
+#   "ptr_tenx_tsv4",
+#   "ptr_tenx_tsv5",
+#   "ptr_tenx_batch2"
+# )
 func_path_10x_matrix <- function(sample_names) {
   sprintf(
     "outputs/CellRanger/count/%s/outs/filtered_feature_bc_matrix",
     sample_names
 )
 }
-func_path_memberships <-function(sample_name) {
-  sprintf(
-    "outputs/notebooks-new/MetaCell/%s.csv",
-    sample_name
-  ) 
+func_path_mc_label <- function(sample_name, K, alpha) {
+  apply(
+    expand.grid(sample_name, K, alpha),
+    MARGIN = 1,
+    FUN = function(row) {
+      sample <- row[1]
+      K <- row[2]
+      alpha <- row[3]
+      glue(path_mc_label_template)
+    }
+  )
 }
 ```
 
-Filter metacells
+## Find the optimal K-alpha combination
 
-```{r}
-for (sample_name in sample_names) {
-  obj_singlecell <- func_path_10x_matrix(sample_name) %>% 
-    Read10X %>% CreateSeuratObject
-  cell_membership <- read.csv(
-    func_path_memberships(sample_name),
-    header = TRUE,
-    row.names = 1
-  )
-  colnames(cell_membership) <- c("0")
-  detect_res = mcRigor_DETECT(
-    obj_singlecell = obj_singlecell, 
-    cell_membership = cell_membership,
-    tgamma = NULL,
-    assay_type = 'RNA',
-    feature_use = 2000,
-    aggregate_method = 'mean',
-    Nrep = 1,
-    test_cutoff = 0.05,
-    thre_smooth = TRUE,
-    thre_bw = 1/6
-  )
-  print(sample_name)
+```{r Find the optimal K}
+# import membership data
+paths_mc_label <- func_path_mc_label(sample_name, Ks, alphas)
+paths_mc_label <- paths_mc_label[file.exists(paths_mc_label)]
+
+# full_join membership data
+cell_membership_all <- data.frame()
+for (p in paths_mc_label) {
+  mc_label_tmp <- read.csv(p)
+  colnames(mc_label_tmp) <- c("barcode", p)
+  if (dim(cell_membership_all)[1] == 0) {
+    cell_membership_all <- mc_label_tmp
+  } else {
+    cell_membership_all <- full_join(
+      cell_membership_all, 
+      mc_label_tmp, 
+      by = "barcode"
+    )  
+  }
 }
+
+# format to fit mcRigor
+rownames(cell_membership_all) <- cell_membership_all$barcode
+cell_membership_all <- cell_membership_all[, colnames(cell_membership_all) != "barcode"]
+head(cell_membership_all) # outlier cells missing mc labels were filled by NA
+Ks <- str_extract(colnames(cell_membership_all), "(?<=K=)\\d+")
+alphas <- str_extract(colnames(cell_membership_all), "(?<=alpha=)\\d+(\\.\\d+)?")
+colnames(cell_membership_all) <- as.character(as.numeric(Ks) + as.numeric(alphas))
+
+# import single-cell data
+obj_singlecell <- func_path_10x_matrix(sample_name) %>% 
+  Read10X %>% CreateSeuratObject
+
+# mcRigor optimize
+optimize_res = mcRigor_OPTIMIZE(
+obj_singlecell = obj_singlecell, 
+  cell_membership = cell_membership_all[, drop=FALSE]
+)
+```
+
+### Plot scores
+
+```{r Plot scores}
+png(
+  path_mc_score_plot,
+  width = 16,
+  height = 9,
+  units = "in",
+  res = 600
+)
+print(optimize_res$optim_plot)
+dev.off()
+```
+
+### Export optimized MetaCell label
+
+```{r Export mc label}
+# Export optimized_res
+saveRDS(optimize_res, path_opt_res)
+
+# Export optimal metacell labels (columns: barcode, mc_id, trustworthy)
+opt_metacell <- optimize_res$opt_metacell
+sc_membership <- opt_metacell@misc$cell_membership
+write.csv(
+  sc_membership,
+  path_mc_label_out
+)
+```
+
+## Summary
+
+```{r summary}
+optimize_res
+```
+
+Box plot MetaCell size\~trustworthy
+
+```{r boxplot}
+plot_data <- subset(optimize_res$TabMC, gamma == optimize_res$best_granularity_level)
+boxplot(
+  size ~ mcRigor,
+  data = plot_data
+)
 ```
