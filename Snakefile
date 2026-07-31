@@ -9,7 +9,7 @@
 # level 3: module statements
 
 # load config file
-configfile: "configs/config.json"
+configfile: "config/config.json"
 
 # include sub-workflows
 include: "workflows/Utilities.smk"
@@ -20,6 +20,7 @@ include: "workflows/VariantCalling-DNA-GATK.smk"
 include: "workflows/LCM-RNA-editing.smk"
 include: "workflows/Bulk-scRNA-editing.smk"
 include: "workflows/VariantAnnotation.smk"
+include: "workflows/MetaCell.smk"
 
 # Custom functions used by all workflows
 from typing import List
@@ -138,6 +139,46 @@ rule LCM_RNA_editing:
         echo {input} >> {output}
         """
         
+rule McRigor:
+    input:
+        expand(
+            "outputs/mcRigor/{sample}/optimize_res.rds",
+            sample=[
+                "ptr_tenx_batch2",
+                "ptr_tenx_tsv2", 
+                "ptr_tenx_tsv3", 
+                "ptr_tenx_tsv4", 
+                "ptr_tenx_tsv5",
+                "ptr_tenx_tst2", 
+                "ptr_tenx_tst3", 
+                "ptr_tenx_tst4",
+                "ptr_tenx_tso2", 
+                "ptr_tenx_tso3", 
+                "ptr_tenx_tso4"
+            ]
+        )
+
+rule MetaCell:
+    input:
+        expand(
+            "outputs/MetaCell/{sample}/K={K}/alpha={alpha}/metacell.csv",
+            sample=[
+                "ptr_tenx_batch2",
+                "ptr_tenx_tsv2", 
+                "ptr_tenx_tsv3", 
+                "ptr_tenx_tsv4", 
+                "ptr_tenx_tsv5",
+                "ptr_tenx_tst2", 
+                "ptr_tenx_tst3", 
+                "ptr_tenx_tst4",
+                "ptr_tenx_tso2", 
+                "ptr_tenx_tso3", 
+                "ptr_tenx_tso4"
+            ],
+            K=[30, 40, 50, 60, 70],
+            alpha=[0.6, 0.8, 1, 1.2]
+        )
+
 
 
 
