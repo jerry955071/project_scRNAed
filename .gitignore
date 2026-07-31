@@ -1,15 +1,26 @@
+# ignore general files
+.snakemake
+.vscode/*
+*/.ipynb_checkpoints/*
+
+
+# ignore workflow specific files
 tests/*
 references/*
-src/cellranger-9.0.1/*
-src/seacells/seacells/*
-src/seacells/SEACells/*
-src/bcftools-1.22/*
 outputs/*
-*tmp*
 nohup-out/*
 logs/*
-.snakemake
+*tmp*
 rawdata/*
-.vscode/*
 external_data/*
-*/.ipynb_checkpoints/*
+
+# ignore large/downloadable software
+src/*
+!src/bcftools-1.22.tar.bz2
+!src/freebayes/Dockerfile
+!src/pysam/Dockerfile
+!src/reditools1/Dockerfile
+!src/reditools3/Dockerfile
+!src/rstudio-server*
+!src/vawk/Dockfile
+!src/vcflib/Dockerfile
