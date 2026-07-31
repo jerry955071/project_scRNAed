@@ -1,0 +1,644 @@
+## Library packages
+
+```{r}
+library(glmmTMB)
+library(doParallel)
+library(foreach)
+library(DHARMa)
+library(emmeans)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(patchwork)
+library(ComplexUpset)
+library(data.table)
+```
+
+## Global variables
+
+```{r}
+input_dir_root <- "outputs/notebooks-new/EDA-on-scSNV"
+# output_dir_root <- "TODO"
+cluster_palette <- c(
+  "cluster_1" = "#1F77B4",
+  "cluster_2" = "#7A4A33",
+  "cluster_3" = "#E28413",
+  "cluster_4" = "#F3EC5B",
+  "cluster_5" = "#61C9A8",
+  "cluster_6" = "#6362A7",
+  "cluster_7" = "#FF0000",
+  "cluster_8" = "#FF8F8F"
+)
+cluster_map <- c(
+  "cluster_1" = "Vessel",
+  "cluster_2" = "FuIP",
+  "cluster_3" = "RO",
+  "cluster_4" = "RP",
+  "cluster_5" = "FuEP",
+  "cluster_6" = "FuO",
+  "cluster_7" = "Fiber",
+  "cluster_8" = "Ray"
+)
+```
+
+## Functions
+
+```{r}
+# function for filtering locus data
+filter_locus_data <- function(df) {
+  # keep only the 8 biologically meaningful clusters
+  df <- subset(df, df$cluster %in% paste0("cluster_", 1:8))
+  
+  # filter out cluster-treatment combinations with < 10 cells, 
+  # as they may lead to model convergence issues
+  cell_counts <- df %>% count(cluster, treatment)
+  invalid_combos <- cell_counts %>% filter(n < 10)
+  df <- df %>% anti_join(invalid_combos, by = c("cluster", "treatment"))
+  
+  return(df)
+}
+
+# function checking if the locus is valid for testing
+is_valid_locus <- function(df) {
+  n_cluster <- length(unique(df$cluster))
+  n_treatment <- length(unique(df$treatment))
+  return(n_cluster > 1 && n_treatment > 1)
+}
+
+
+# function checking if the model converged successfully
+is_model_converged <- function(model) {
+  if (is.null(model)) return(FALSE)
+  if (model$fit$convergence != 0) return(FALSE)
+  if (!model$sdr$pdHess) return(FALSE)
+  return(TRUE)
+}
+
+# P value to stars
+p_values_to_stars <- function(p_values) {
+  cut(  
+    p_values,
+    breaks = c(-Inf, 0.001, 0.01, 0.05, Inf), 
+    labels = c("***", "**", "*", "ns")
+  )
+}
+
+# function fit model to each locus
+test_locus <- function(file_path) {
+  # get locus id from file_path
+  locus_id <- basename(dirname(file_path))
+  
+  # create output list
+  out_list <- list(
+    locus = locus_id,
+    global = NULL,
+    treatment_within_cluster = NULL,
+    dharma = NULL,
+    model = NULL 
+  )
+  
+  # read and check data
+  df_locus <- read.csv(file_path) 
+  df_locus <- filter_locus_data(df_locus)
+
+  # see if the locus is valid for testing (i.e., has more than 1 cluster and more than 1 treatment)
+  if (!is_valid_locus(df_locus)) {
+    return(out_list)
+  }
+  
+  # build model
+  model_int <- tryCatch(
+    glmmTMB(
+      cbind(alt, ref) ~ cluster * treatment + (1 | individual),
+      family = betabinomial(),
+      data = df_locus
+    ),
+    error = function(e) {NULL}
+  )
+  out_list$model <- model_int 
+  # stop if model failed to converge
+  if (!is_model_converged(model_int)) {
+    return(out_list)
+  }
+
+  # test whether cluster, treatment, cluster x treatment significantly affect 
+  # editing level
+  aov_tab <- tryCatch(
+    car::Anova(model_int, type = 2), 
+    error = function(e) {NULL}
+  )
+  global <- data.frame(
+    locus = locus_id,
+    effect = rownames(aov_tab),
+    chi_sq = aov_tab$Chisq,
+    df = aov_tab$Df,
+    p_value = aov_tab$`Pr(>Chisq)`
+  )
+  out_list$global <- global
+  # stop if ANOVA failed
+  if (is.null(aov_tab)) {
+    return(out_list)
+  }
+
+  # check model overdispersion and outliers using DHARMa
+  dharma_res <- tryCatch({
+    set.seed(42)
+    sim_res <- simulateResiduals(model_int, n = 1000)
+    data.frame(
+      dispersion_p = testDispersion(sim_res, plot = FALSE)$p.value,
+      outlier_p = testOutliers(sim_res, type="bootstrap", plot = FALSE)$p.value,
+      locus = locus_id
+    )
+  }, error = function(e) {NULL})
+  out_list$dharma <- dharma_res
+  
+  # test treatment within cluster
+  emm_ct <- emmeans(model_int, ~ treatment | cluster)
+  ct_contrast <- as.data.frame(
+    contrast(emm_ct, method = "pairwise")
+  )
+
+  ct_contrast$locus <- locus_id
+  ct_contrast$contrast_type <- "treatment_within_cluster"
+  out_list$treatment_within_cluster <- ct_contrast
+  
+  return(out_list)
+}
+
+# function plotting DHARMa diagnostics for a locus
+plot_dharma_diagnostics <- function(model_int, locus_id, filename) {
+  png(filename, width = 800, height = 400)
+  old_par <- par(mfrow = c(1, 2))
+  
+  # simulate residuals
+  set.seed(42)
+  sim_res <- simulateResiduals(model_int, n = 1000)
+
+  # plot diagnostics
+  plot(
+    sim_res,
+    title = paste("DHARMa Diagnostics:", locus_id)
+  )
+  par(old_par)
+  dev.off()
+}
+
+
+get_contrast_df <- function(model, specs, by) {
+  # get contrast results for factor1 within each level of factor2
+  contrast_df <- emmeans(model, as.formula(paste("~", specs, "|", by))) %>%
+    contrast(method = "pairwise") %>%
+    as.data.frame() %>%
+    filter(p.value < 0.05) %>%
+    mutate(
+      star = p_values_to_stars(p.value),
+      spec1 = trimws(sub("-.*", "", contrast)),
+      spec2 = trimws(sub(".*-", "", contrast)),
+    ) %>% 
+    mutate(across(
+      where(is.character),
+      ~ recode(.x, !!!cluster_map)
+    )) %>% 
+    mutate(across(
+      where(is.character),
+      ~ recode(.x, !!!c("tension" = "T", "opposite" = "O", "normal" = "N"))
+    )) %>% 
+    mutate(
+      text = paste0(
+        spec1,
+        star,
+        spec2
+      )
+    )
+  return(contrast_df)
+}
+
+
+plot_editing_jitter <- function(
+  df_locus, x_var, y_var, 
+  group_var, color_var, palette = NULL,
+  subtitle, caption,
+  x_labels = NULL, color_labels = NULL,
+  result,
+  filename
+) {
+  # create basic data mapping
+  p <- ggplot(
+    df_locus,
+    aes(
+      x = .data[[x_var]],
+      y = .data[[y_var]],
+      group = .data[[group_var]],
+      color = .data[[color_var]]
+    )
+  )
+
+  # plot jitter
+  p <- p + geom_jitter(
+    position = position_jitterdodge(
+      jitter.width = 0.2,
+      dodge.width = 0.7
+    ), 
+    size = 1.2, 
+    alpha = 0.6
+  ) 
+  # add color palette if provided
+  if (!is.null(palette) & !is.null(color_labels)) {
+    p <- p + scale_color_manual(
+      values = palette,
+      labels = color_labels
+    )
+  }
+
+  # add median bars by group
+  p <- p + stat_summary(
+    fun = median,
+    mapping = aes(group = .data[[group_var]]),
+    geom = "crossbar", 
+    position = position_dodge(width = 0.7),
+    width = 0.4, 
+    linewidth = 0.6,
+    color = "black",
+    show.legend = FALSE
+  )
+
+  # added cell counts per x_var per group
+  p <- p + geom_text(
+    data = df_locus %>% count(.data[[x_var]], .data[[group_var]]),
+    aes(x = .data[[x_var]], y = 1.05, label = paste("n =", n), group = .data[[group_var]]),
+    position = position_dodge(width = 0.7),
+    vjust = 0,
+    color = "black",
+    angle = 45,
+    inherit.aes = FALSE
+  )
+
+  # add significant contrast annotations
+  contrast_df <- get_contrast_df(result$model, specs = group_var, by = x_var)
+  p <- p + geom_text(
+    data = contrast_df,
+    aes(x = .data[[x_var]], y = 1.20, label = text, group = contrast), # dodge by contrast to avoid overlap
+    position = position_dodge(width = 0.7),
+    vjust = 0,
+    color = "black",
+    angle = 45,
+    size = 3,
+    inherit.aes = FALSE
+  )
+
+  # cosmetic adjustments
+  p <- p + labs(
+      title = paste("RNA Editing Level:", result$locus),
+      subtitle = paste0("Bars indicate median\n", subtitle),
+      caption = caption,
+    ) +
+    scale_y_continuous(
+      labels = scales::percent, 
+      limits = c(0, 1.25),
+      breaks = seq(0, 1, by = 0.25),
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = "right",
+      plot.title = element_text(face = "bold")
+    )
+
+  # conditional cosmetic adjustment
+  if (!is.null(x_labels)) {
+    p <- p + scale_x_discrete(
+      labels = x_labels,
+      drop = FALSE
+    )
+  }
+
+  # save plot
+  ggsave(filename, plot = p, width = 8, height = 6)
+}
+
+
+# plot editing level ~ read depth for a locus
+plot_depth_correlation <- function(df_locus, locus_id, filename) {
+  df_test <- df_locus %>%
+    mutate(
+      total_counts = alt + ref,
+      editing_level = alt / total_counts
+    )
+  
+  # Spearman correlation test
+  cor_test <- cor.test(df_test$editing_level, df_test$total_counts, method = "spearman")
+  
+  # plot
+  p <- ggplot(
+    df_test,
+    aes(x = total_counts, y = editing_level)
+  ) +
+    geom_point(
+      alpha = 0.3,
+      color = "steelblue",
+      size = 0.8
+    ) +
+    geom_smooth(
+      method = "lm",
+      color = "firebrick",
+      linetype = "dashed",
+      linewidth = 0.8
+    ) +
+    labs(
+      title = paste("Read Depth vs. Editing Level:", locus_id),
+      subtitle = paste(
+        "Spearman rho =", round(cor_test$estimate, 3), 
+        "| p-value =", format.pval(cor_test$p.value, eps = 0.001)
+      ),
+      x = "Total Read Depth (alt + ref)",
+      y = "Editing Level"
+    ) +
+    scale_y_continuous(
+      labels = scales::percent, limits = c(0, 1)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold")
+    )
+
+  # save plot
+  ggsave(filename, p, width = 6, height = 5, dpi = 300)
+}
+```
+
+## Register parallel processing cores
+
+```{r}
+Sys.setenv(
+  OMP_NUM_THREADS = 1,
+  OPENBLAS_NUM_THREADS = 1,
+  MKL_NUM_THREADS = 1,
+  VECLIB_MAXIMUM_THREADS = 1,
+  NUMEXPR_NUM_THREADS = 1
+)
+
+n_cores <- parallel::detectCores() - 1
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+```
+
+## Find loci data files
+
+```{r}
+files <- list.files(
+  input_dir_root, 
+  pattern = ".csv$", 
+  full.names = TRUE,
+  recursive = TRUE
+)
+```
+
+## Parallel running `test_locus` on each locus
+
+```{r}
+results <- foreach(
+  file = files,
+  .packages = c("glmmTMB", "emmeans", "car", "DHARMa", "dplyr", "magrittr"),
+  .errorhandling = "pass"
+) %dopar% {
+  
+  test_locus(file)
+  
+}
+names(results) <- sapply(results, function(res) {res$locus})
+```
+
+## Stop parallel cluster
+
+```{r}
+stopCluster(cl)
+```
+
+## Show DHARMa results
+
+```{r}
+# get DHARMa results and ANOVA results
+dharma_summary <- do.call(rbind, lapply(results, `[[`, "dharma")) # NULLs are ignored
+global_table <- do.call(rbind, lapply(results, `[[`, "global")) # NULLs are ignored
+df_eval <- inner_join(
+  global_table %>% filter(effect == "cluster:treatment"), 
+  dharma_summary, by = "locus"
+) %>% inner_join(
+  global_table %>% filter(effect == "cluster") %>% select(locus, cluster_chisq = chi_sq, cluster_p = p_value), 
+  by = "locus"
+) %>% inner_join(
+  global_table %>% filter(effect == "treatment") %>% select(locus, treatment_chisq = chi_sq, treatment_p = p_value), 
+  by = "locus"
+)
+
+# adjust p-values for multiple testing using Benjamini-Hochberg method
+df_eval$p_adj <- p.adjust(df_eval$p_value, method = "BH")
+idx <- df_eval$p_adj >= 0.05
+idx[is.na(idx)] <- FALSE
+df_eval[idx, "cluster_p_adj"] <- p.adjust(df_eval[idx, "cluster_p"], method = "BH")
+df_eval[idx, "treatment_p_adj"] <- p.adjust(df_eval[idx, "treatment_p"], method = "BH")
+
+# Calculate validation rates for ANOVA significant loci
+sig_loci <- df_eval %>% filter(
+  p_adj < 0.05 | (p_adj >= 0.05 & (cluster_p_adj < 0.05 | treatment_p_adj < 0.05))
+  ) # consider loci with significant interaction or significant main effects as significant
+sig_valid_rate <- mean(
+  sig_loci$dispersion_p > 0.05 & sig_loci$outlier_p > 0.05, 
+  na.rm = TRUE
+)
+
+# Calculate validation rates for ANOVA non-significant loci
+nonsig_loci <- df_eval %>% filter(!locus %in% sig_loci$locus)
+nonsig_valid_rate <- mean(
+  nonsig_loci$dispersion_p > 0.05 & nonsig_loci$outlier_p > 0.05, 
+  na.rm = TRUE
+)
+
+print(sprintf("Validation rate (significant): %.2f%%", sig_valid_rate * 100))
+print(sprintf("Validation rate (non-significant): %.2f%%", nonsig_valid_rate * 100))
+```
+
+## Extract high confidence loci:
+- (1) BH-adjusted ANOVA p-value < 0.05
+- (2) DHARMa dispersion test p-value > 0.05
+- (3) DHARMa outlier test p-value > 0.05 
+
+```{r}
+significant_loci <- df_eval %>%
+  filter(p_adj < 0.05 | (p_adj >= 0.05 & (cluster_p_adj < 0.05 | treatment_p_adj < 0.05))) %>% 
+  filter(dispersion_p > 0.05) %>%
+  filter(outlier_p > 0.05) %>%
+  ungroup()
+```
+
+# Subset variant annotation results for significant loci
+
+```{r}
+# read
+variant_annotation <- fread("tests/VariantAnnotation-ptr-multi/variant_annotation.tsv")
+variant_location <- fread("tests/VariantAnnotation-ptr-multi/variant_location.tsv") # check here for variant not on CDS
+
+# setkey CHROM, POS
+variant_annotation$index <- paste(variant_annotation$CHROM, variant_annotation$POS, sep = ":")
+variant_location$index <- paste(variant_location$CHROM, variant_location$POS, sep = ":")
+setkey(variant_annotation, index)
+setkey(variant_location, index)
+
+# subset for significant loci
+variant_annotation_sig <- variant_annotation[variant_annotation$index %in% significant_loci$locus]
+variant_location_sig <- variant_location[variant_location$index %in% significant_loci$locus]
+variant_annotation_sig <- variant_annotation_sig %>% select(-index) # remove unused columns
+variant_location_sig <- variant_location_sig %>% select(-index) # remove unused columns
+
+# plot categorical counts
+svg("tests/test-glm/significant_loci_variant_location.svg", width = 4, height = 4)
+variant_location_sig$LOCATION %>% table %>% as.data.frame %>% ggplot(
+    aes(x=., y=Freq)
+  ) + 
+  geom_col() +
+  geom_text(
+    aes(label = Freq), 
+    vjust = -0.5
+  ) + 
+  theme_minimal()
+dev.off()
+
+# write to file
+fwrite(variant_annotation_sig, "tests/test-glm/significant_loci_variant_annotation.tsv", sep = "\t")
+fwrite(variant_location_sig, "tests/test-glm/significant_loci_variant_location.tsv", sep = "\t")
+```
+
+## Plot results
+
+```{r}
+for (index in 1:nrow(significant_loci)) {
+  l_tmp <- significant_loci$locus[index]
+  # plot DHARMa diagnostics results
+  plot_dharma_diagnostics(
+    results[[l_tmp]]$model, 
+    results[[l_tmp]]$locus, 
+    paste0("tests/test-glm/", l_tmp, "_dharma_diagnostics.png")
+  )
+
+  # plot editing level jitter plot
+  ## read data
+  locus_file <- file.path(input_dir_root, paste0(l_tmp, "/data.csv"))
+  ## filter data
+  df_locus <- read.csv(locus_file) %>% filter_locus_data()
+  
+  ## make sure key columns are factors
+  df_locus$treatment <- factor(df_locus$treatment, levels = c("normal", "tension", "opposite"))
+  df_locus$cluster <- factor(
+    df_locus$cluster, 
+    levels = paste0("cluster_", c(3, 6, 4, 5, 2, 8, 1, 7))
+  ) # reorder clusters by median editing level
+  
+  ## calculate editing level
+  df_locus <- df_locus %>% mutate(editing_level = alt / (alt + ref))
+  
+  ## create subtitle with adjusted p-values and significance stars
+  subtitle <- paste0(
+    c("Adjusted P: cluster:treatment=", "cluster=", "treatment="),
+    significant_loci[index, c("p_adj", "cluster_p_adj", "treatment_p_adj")] %>% as.numeric %>% p_values_to_stars,
+    collapse = "; "
+  )
+
+  ## get variant location and annotation as caption
+  variant_location_tmp <- paste0(
+    apply(variant_location[l_tmp], 1, function(row) {
+      paste(row["LOCATION"], "of", row["GENEID"])
+    }),
+    collapse = "; "
+  )
+  variant_annotation_tmp <- paste0(
+    apply(variant_annotation[l_tmp], 1, function(row) {
+      if (is.na(row["GENEID"])) {
+        return()
+      }
+      sprintf(
+        "%s %s > %s (%s%s%s)",
+        row["GENEID"],
+        row["REFCODON"],
+        row["VARCODON"], 
+        row["REFAA"],
+        row["PROTEINLOC"],
+        row["VARAA"]
+      )
+    }),
+    collapse = "\n"
+  )
+  captions <- paste(variant_location_tmp, variant_annotation_tmp, sep="\n")
+
+  ## jitter treatment within cluster
+  plot_editing_jitter(
+    df_locus,
+    x_var = "cluster",
+    y_var = "editing_level",
+    group_var = "treatment",
+    color_var = "treatment",
+    subtitle = subtitle,
+    caption = captions,
+    x_labels = cluster_map,
+    result = results[[l_tmp]],
+    filename = paste0("tests/test-glm/", l_tmp, "_editing_level_treatment_within_cluster.png")
+  )
+
+  ## jitter cluster within treatment
+  plot_editing_jitter(
+    df_locus,
+    x_var = "treatment",
+    y_var = "editing_level",
+    group_var = "cluster",
+    color_var = "cluster",
+    palette = cluster_palette,
+    subtitle = subtitle,
+    caption = captions,
+    color_labels = cluster_map,
+    result = results[[l_tmp]],
+    filename = paste0("tests/test-glm/", l_tmp, "_editing_level_cluster_within_treatment.png")
+  )
+
+  # plot editing level ~ read depth correlation
+  plot_depth_correlation(
+    df_locus,
+    l_tmp,
+    paste0("tests/test-glm/", l_tmp, "_depth_correlation.png")
+  )
+
+  # write model summary to text file
+  sink(paste0("tests/test-glm/", l_tmp, "_model_summary.txt"))
+  print(summary(results[[l_tmp]]$model))
+  sink()
+
+  # write treatment within cluster contrast results to text file
+  # write.csv(
+  #   results[[l_tmp]]$treatment_within_cluster %>% filter(p.value < 0.05),
+  #   paste0("tests/test-glm/", l_tmp, "_treatment_within_cluster.csv"),
+  #   row.names = FALSE
+  # )
+}
+```
+
+# Plot UpSet plot
+
+```{r}
+df_sets <- significant_loci %>%
+  mutate(
+    interaction = p_adj < 0.05,
+    cluster = cluster_p_adj < 0.05,
+    treatment = treatment_p_adj < 0.05
+  ) %>% 
+  mutate(
+    cluster = ifelse(interaction, FALSE, cluster),
+    treatment = ifelse(interaction, FALSE, treatment)
+  ) %>%
+  mutate(across(c(interaction, cluster, treatment), as.integer))
+
+svg("tests/test-glm/significant_loci_upset.svg", width = 4, height = 4)
+ComplexUpset::upset(
+  df_sets,
+  intersect = c("interaction", "cluster", "treatment")
+)
+dev.off()
+```
+
