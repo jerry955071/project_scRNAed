@@ -11,7 +11,7 @@ rule gatk_addreplacerg:
     input:
         lambda wildcards: query(config["samples-dna"], "name", wildcards.sample)["bam_path"]
     output:
-        "outputs/VariantCalling-DNA/gatk_addreplacerg/{sample}.sorted.addrg.bam"
+        temp("outputs/VariantCalling-DNA/gatk_addreplacerg/{sample}.sorted.addrg.bam")
     log:
         "logs/VariantCalling-DNA/gatk_addreplacerg/{sample}.log"
     shell:
@@ -33,7 +33,7 @@ rule gatk_markduplicates:
     input:
         "outputs/VariantCalling-DNA/gatk_addreplacerg/{sample}.sorted.addrg.bam"
     output:
-        bam="outputs/VariantCalling-DNA/gatk_markduplicates/{sample}.sorted.addrg.markdup.bam",
+        bam=temp("outputs/VariantCalling-DNA/gatk_markduplicates/{sample}.sorted.addrg.markdup.bam"),
         metrics="outputs/VariantCalling-DNA/gatk_markduplicates/{sample}.metrics.txt"
     log:
         "logs/VariantCalling-DNA/gatk_markduplicates/{sample}.log"
