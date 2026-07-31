@@ -1,0 +1,116 @@
+# Summarizing MetaCell & McRigor results
+
+MetaCell analysis was performed on each dataset using varying combinations of K (30, 40, 50, 60, 70) and alpha (0.6, 0.8. 1.0, 1.2) for `metacell::mcell_mc_from_coclust_balanced`. (Script: "notebooks-new/MetaCell.Rmd")
+
+McRigor was used to find the best metacell partitioning parameters for each dataset. (Script: "notebooks-new/McRigor.Rmd")
+
+Both pipelines were called using Snakemake. The rules were in "workflows/MetaCell.smk"
+
+## Setup
+
+Library
+
+```{r}
+library(glue)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+```
+
+Vars
+
+```{r}
+template_opt_mc <- "outputs/mcRigor/{sample}/metacell.csv"
+sample_names <- c(
+  "ptr_tenx_batch2",
+  "ptr_tenx_tsv2", 
+  "ptr_tenx_tsv3", 
+  "ptr_tenx_tsv4", 
+  "ptr_tenx_tsv5",
+  "ptr_tenx_tst2", 
+  "ptr_tenx_tst3", 
+  "ptr_tenx_tst4",
+  "ptr_tenx_tso2", 
+  "ptr_tenx_tso3", 
+  "ptr_tenx_tso4"
+)
+```
+
+Import optimized metacell partitions
+
+```{r}
+mc_labels <- data.frame()
+for (s in sample_names) {
+  foo <- read.csv(glue(template_opt_mc, sample=s))
+  names(foo)[names(foo) == "X"] <- "barcode"
+  foo["sample"] <- s
+  mc_labels %<>% rbind(foo)
+}
+mc_labels$sample <- factor(mc_labels$sample, levels = sample_names)
+summary(mc_labels)
+```
+
+Box plot of cell sizes (x = sample; y = sizes; col = trustworthy/dubious)
+
+```{r}
+data_plot <- mc_labels %>% group_by(sample, Metacell, mcRigor_sc) %>% count(name = "size")
+p_box <- ggplot(
+    data = data_plot, 
+    aes(x = sample, y = size, fill = mcRigor_sc)
+  ) + 
+  geom_boxplot(
+    width = 0.6,
+    position = position_dodge(width = 0.8)
+  ) +
+  scale_fill_manual(
+    values = c(
+      "trustworthy" = "#72caed", 
+      "dubious" = "#f57d81"
+    )
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  labs(
+    y = "Cell sizes",
+    fill = "mcRigor"
+  )
+p_box
+```
+
+Bar graph of MetaCell counts
+
+```{r}
+p_bar <- ggplot(
+    data = data_plot,
+    aes(x = sample, fill = mcRigor_sc)
+  ) + geom_bar(
+    width = 0.8,
+    position="fill"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "trustworthy" = "#72caed", 
+      "dubious" = "#f57d81"
+    )
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  labs(
+    y = "Percentage",
+    fill = "mcRigor"
+  )
+p_bar
+```
+
+Combine plots and output
+
+```{r}
+p_patch <- p_box / p_bar
+p_patch
+```
