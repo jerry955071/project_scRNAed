@@ -1,6 +1,9 @@
 tests/*
 references/*
 src/cellranger-9.0.1/*
+src/seacells/seacells/*
+src/seacells/SEACells/*
+src/bcftools-1.22/*
 outputs/*
 *tmp*
 nohup-out/*
@@ -9,5 +12,4 @@ logs/*
 rawdata/*
 .vscode/*
 external_data/*
-src/bcftools-1.22/*
-notebooks/.ipynb_checkpoints/*
+*/.ipynb_checkpoints/*
