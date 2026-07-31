@@ -139,10 +139,11 @@ rule LCM_RNA_editing:
         echo {input} >> {output}
         """
         
-rule McRigor:
+
+rule MC_vartrix:
     input:
         expand(
-            "outputs/mcRigor/{sample}/optimize_res.rds",
+            "outputs/MetaCell/aggregate_metacell_vartrix/{sample}/alt.mtx",
             sample=[
                 "ptr_tenx_batch2",
                 "ptr_tenx_tsv2", 
@@ -159,9 +160,11 @@ rule McRigor:
         )
 
 rule MetaCell:
+    # execution might fail for some combinations of parameters; downstream rules
+    # runs regardless; manually check these output before running `MC_vartrix`
     input:
         expand(
-            "outputs/MetaCell/{sample}/K={K}/alpha={alpha}/metacell.csv",
+            "outputs/MetaCell/metacell/{sample}/K={K}/alpha={alpha}/metacell.csv",
             sample=[
                 "ptr_tenx_batch2",
                 "ptr_tenx_tsv2", 
