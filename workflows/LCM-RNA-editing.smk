@@ -1,6 +1,6 @@
 # Reference: https://github.com/BioinfoUNIBA/REDItools2?tab=readme-ov-file#7-reditools-20-options
 # Snakemake setups
-configfile: "configs/config.json"
+configfile: "config/config.json"
 wildcard_constraints:
     sample="|".join([i["name"] for i in config["samples-lcm"]]),
     species="|".join([i["species"] for i in config["references"]]),

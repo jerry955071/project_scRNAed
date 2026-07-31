@@ -1,5 +1,5 @@
 # Snakemake setups
-configfile: "configs/config.json"
+configfile: "config/config.json"
 wildcard_constraints:
     sample="|".join([i["name"] for i in config["samples"]]),
     species="|".join([i["species"] for i in config["references"]]),
