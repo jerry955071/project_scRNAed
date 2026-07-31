@@ -1,0 +1,17 @@
+executor: slurm
+jobs: unlimited
+software-deployment-method: apptainer
+
+partitions:
+  slurmcustGroup:
+    max_mem_mb_per_cpu: 5000
+    max_mem_mb: 400000
+    max_runtime: 1440
+
+default-resources:
+  slurm_extra: "--exclude=slurmcust6"
+
+slurm:
+  sbatch-defaults:
+    output: "logs/slurm/{rule}_{jobid}.out"
+    error: "logs/slurm/{rule}_{jobid}.err"
