@@ -1,3 +1,10 @@
+---
+params:
+  template_opt_mc: "outputs/MetaCell/mcrigor/{sample}/metacell.csv"
+  template_opt_rds: "outputs/MetaCell/mcrigor/{sample}/optimize_res.rds"
+  template_path_h5: "outputs/CellRanger/count/{sample}/outs/filtered_feature_bc_matrix.h5"
+---
+
 # Summarizing MetaCell & McRigor results
 
 MetaCell analysis was performed on each dataset using varying combinations of K (30, 40, 50, 60, 70) and alpha (0.6, 0.8. 1.0, 1.2) for `metacell::mcell_mc_from_coclust_balanced`. (Script: "notebooks-new/MetaCell.Rmd")
@@ -15,12 +22,15 @@ library(glue)
 library(dplyr)
 library(ggplot2)
 library(patchwork)
+library(Seurat)
 ```
 
 Vars
 
 ```{r}
-template_opt_mc <- "outputs/mcRigor/{sample}/metacell.csv"
+template_opt_mc <- params$template_opt_mc
+template_opt_rds <- params$template_opt_rds
+template_path_h5 <- params$template_path_h5
 sample_names <- c(
   "ptr_tenx_batch2",
   "ptr_tenx_tsv2", 
@@ -31,6 +41,10 @@ sample_names <- c(
   "ptr_tenx_tst3", 
   "ptr_tenx_tst4",
   "ptr_tenx_tso2", 
+  "ptr_tenx_tso3", 
+  "ptr_tenx_tso4"
+)
+sample_names <- c(
   "ptr_tenx_tso3", 
   "ptr_tenx_tso4"
 )
@@ -113,4 +127,46 @@ Combine plots and output
 ```{r}
 p_patch <- p_box / p_bar
 p_patch
+```
+
+Plot MetaCells on single-cell UMAP embeddings
+
+```{r}
+p_mc_list <- list()
+for (s in sample_names) {
+  # read mcRigor results
+  optimize_res <- readRDS(glue(template_opt_rds, sample = s))
+  opt_metacell <- optimize_res$opt_metacell
+  sc_membership <- opt_metacell@misc$cell_membership$Metacell
+  names(sc_membership) <- rownames(opt_metacell@misc$cell_membership)
+  
+  # read single-cell
+  obj_singlecell <- Read10X_h5(
+    glue(template_path_h5, sample=s)
+  ) %>% CreateSeuratObject()
+  obj_singlecell <- NormalizeData(obj_singlecell)
+  obj_singlecell <- FindVariableFeatures(obj_singlecell)
+  obj_singlecell <- ScaleData(obj_singlecell)
+  obj_singlecell <- RunPCA(obj_singlecell)
+  obj_singlecell <- RunUMAP(
+    obj_singlecell, 
+    dims = 1:30,
+    metric = "euclidean",
+    n.neighbors = 30,
+    min.dist = .1,
+    seed.use = 42
+  )
+  
+  break
+  p_mc <- mcRigor_projection(
+    obj_singlecell = obj_singlecell, 
+    sc_membership = sc_membership,
+    color_field = 'celltype.l1',
+    dub_mc_test.label = T, 
+    test_stats = optimize_res$TabMC, 
+    Thre = optimize_res$thre
+  )
+  p_mc_list[[s]] <- p_mc
+}
+
 ```
