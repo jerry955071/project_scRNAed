@@ -4,6 +4,7 @@ params:
   Ks: 30 40 50 60 70
   alphas: 0.6 0.8 1 1.2
   path_output: str
+  path_mc_label_template: str
 ---
 
 # Filtering metacells
@@ -29,12 +30,13 @@ sample_name <- params$sample_name
 Ks <- strsplit(params$Ks, " ") %>% unlist
 alphas <- strsplit(params$alphas, " ") %>% unlist
 path_output <- params$path_output
+path_mc_label_template <- params$path_mc_label_template
 ```
 
 ### Vars
 
 ```{r Vars}
-path_mc_label_template <- "outputs/MetaCell/{sample}/K={K}/alpha={alpha}/metacell.csv"
+path_mc_label_template <- "outputs/MetaCell/metacell/{sample}/K={K}/alpha={alpha}/metacell.csv"
 path_mc_label_out <- file.path(path_output, "metacell.csv")
 path_mc_score_plot <- file.path(path_output, "optim_plot.png")
 path_opt_res <- file.path(path_output, "optimize_res.rds")
@@ -110,7 +112,7 @@ obj_singlecell <- func_path_10x_matrix(sample_name) %>%
 # mcRigor optimize
 optimize_res = mcRigor_OPTIMIZE(
 obj_singlecell = obj_singlecell, 
-  cell_membership = cell_membership_all[, drop=FALSE]
+  cell_membership = cell_membership_all
 )
 ```
 
