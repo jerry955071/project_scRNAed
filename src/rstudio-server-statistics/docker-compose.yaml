@@ -1,0 +1,17 @@
+version: '3.6'
+services:
+  server:
+    image: chiaenu/rstudio-rstat:4.4.3
+    restart: unless-stopped
+    command: /init
+    environment:
+      - TZ=Asia/Taipei
+      - USERID=1102
+      - GROUPID=1102
+      - DISABLE_AUTH=false
+      - PASSWORD=0000
+      - ROOT=true
+    ports:
+      - 8792:8787
+    volumes:
+      - ../../:/home/rstudio/local:rw
