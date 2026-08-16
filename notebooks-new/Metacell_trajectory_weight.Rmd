@@ -1,0 +1,626 @@
+---
+params:
+  path_metacell_annotated: tests/metacell_annotation/metacell_annotation.csv
+  path_mc_label_template: outputs/MetaCell/mcrigor/{sample}/metacell.csv
+  path_cell_type_annotation: outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv
+  path_outdir: outputs/MetaCell/metacell_trajectory_weight
+  path_seurat_obj: outputs/notebooks-new/Seurat_integration/seurat_integrated.rds
+---
+
+# Annotate Metacell cell label based on single-cell label transferred from [Tung et al.](https://doi.org/10.1186/s13059-022-02845-1)
+
+## Setup
+
+```{r}
+library(dplyr)
+library(magrittr)
+library(glue)
+library(ggplot2)
+library(patchwork)
+library(Seurat)
+library(slingshot)
+
+cell_order <- c("FuO", "RO", "FuEP", "RP", "FuIP", "Ray", "Vessel", "Fiber")
+palette <- c(
+  "#9467BD",
+  "#FF7F0F",
+  "#2AA02A",
+  "#F8E71C",
+  "#8C564B",
+  "#E377C2",
+  "#1F77B4",
+  "#D62728",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4"
+)
+```
+
+## Parse Rmd parameters
+
+```{r}
+path_metacell_annotated <- params$path_metacell_annotated
+path_mc_label_template <- params$path_mc_label_template
+path_cell_type_annotation <- params$path_cell_type_annotation
+path_outdir <- params$path_outdir
+path_seurat_obj <- params$path_seurat_obj
+```
+
+## Create output directory
+
+```{r}
+dir.create(path_outdir)
+```
+
+## Import data
+
+Read transferred single-cell annoation
+
+```{r}
+cell_type_annotation <- read.csv(path_cell_type_annotation, row.names = 1)
+cell_type_annotation["barcode"] <- row.names(cell_type_annotation)
+cell_type_annotation
+```
+
+Read MetaCell membership labels
+
+```{r}
+metacell_memberships <- data.frame()
+for (sname in unique(cell_type_annotation$orig.ident)) {
+  tmp <- read.csv(glue(path_mc_label_template, sample = sname), row.names = 1)
+  sample_suffix <- cell_type_annotation %>% 
+    subset(orig.ident == sname) %>% 
+    row.names %>% 
+    head(1) %>% 
+    strsplit("_") %>% 
+    unlist() %>%
+    extract(2)
+  rownames(tmp) %<>% paste(sample_suffix, sep = "_")
+  metacell_memberships %<>% rbind(tmp)
+}
+metacell_memberships["barcode"] <- row.names(metacell_memberships)
+metacell_memberships
+```
+
+## Read Seurat object
+
+```{r}
+seurat_obj <- readRDS(path_seurat_obj)
+seurat_obj <- subset(
+  seurat_obj, 
+  seurat_obj$orig.ident %in% unique(cell_type_annotation$orig.ident)
+)
+```
+
+## Import lineage pseudo-time
+
+```{r}
+
+```
+
+## Merge MetaCell membership & Cell label annotation data frame
+
+```{r}
+metacell_annotated <- full_join(
+  x = metacell_memberships,
+  y = cell_type_annotation,
+  by = "barcode"
+)
+row.names(metacell_annotated) <- metacell_annotated$barcode
+metacell_annotated %<>% select(-barcode)
+metacell_annotated
+```
+
+Filter NA caused by missing values during full_join
+
+(1) Find the columns containing NA
+
+```{r}
+col_na <- metacell_annotated %>% is.na %>% apply(2, any) %>% which %>% names
+col_na
+```
+
+(2) See if NA coincide per observation
+
+```{r}
+metacell_annotated[, col_na] %>% is.na %>% apply(1, sum) %>% table
+```
+
+(3) Exclude NA-containing rows
+
+```{r}
+metacell_annotated %<>% 
+  subset(metacell_annotated[, col_na] %>% is.na %>% not %>% apply(1, any))
+metacell_annotated
+```
+
+## Calculate the purity of cell types per metacell per sample
+
+### 1. Purity Score
+
+This measures the proportion of cells belonging to the most dominant category within a metacell.
+
+-   **Formula**:
+
+    $$Purity = \max_i(p_i) = \frac{N_{max}}{N_{total}}$$
+
+-   **Interpretation**: Higher values indicate a more homogeneous metacell. A value of $1$ indicates that all cells belong to the same category.
+
+-   **Example**: If a metacell contains 10 cells (8 from category A and 2 from category B), the purity is:
+
+    $$Purity = \frac{8}{10} = 0.8$$
+
+Purity is intuitive, but it only considers the abundance of the dominant category and ignores how the remaining cells are distributed among other categories.
+
+------------------------------------------------------------------------
+
+### 2. Normalized Shannon Entropy
+
+Normalized Shannon entropy measures the overall heterogeneity, or impurity, of the category composition within a metacell. Unlike purity, it considers the relative abundance of **all categories**.
+
+First, Shannon entropy is calculated as:
+
+$$H = -\sum_{i=1}^{K} p_i \log_2(p_i)$$
+
+where $p_i$ is the proportion of cells assigned to category $i$.
+
+To make entropy comparable across different annotation schemes, it is normalized by the maximum possible entropy:
+
+$$H_{norm} = \frac{-\sum_{i=1}^{K} p_i \log_2(p_i)}{\log_2(K)}$$
+
+where $K$ is the **fixed total number of possible categories in the dataset** (e.g., the total number of `cell_label` or `cca_clusters` categories), rather than the number of categories observed within an individual metacell.
+
+-   **Interpretation**:
+
+    -   $H_{norm} = 0$: perfectly pure; all cells belong to one category.
+    -   $H_{norm} \rightarrow 1$: increasingly heterogeneous.
+    -   $H_{norm} = 1$: maximum heterogeneity, where cells are equally distributed among all $K$ possible categories.
+
+-   **Example**: If there are two possible categories and a metacell contains 8 cells from category A and 2 cells from category B:
+
+    $$H = -(0.8\log_2(0.8) + 0.2\log_2(0.2)) \approx 0.72$$
+
+    Because $K = 2$:
+
+    $$H_{norm} = \frac{0.72}{\log_2(2)} = 0.72$$
+
+Thus, higher normalized entropy represents greater metacell impurity, whereas higher purity represents greater metacell homogeneity.
+
+For the metacell analysis, normalized entropy is used as the primary measure of impurity because it incorporates the full distribution of cell identities. Purity is retained as a complementary and readily interpretable measure of the proportion represented by the dominant category.
+
+```{r}
+major_category <- function(x) {
+  tab <- table(x, useNA = "no")
+  names(tab)[which.max(tab)]
+}
+calc_purity <- function(x) {
+  if (length(x) == 0) return(NA)
+  tab <- table(x, useNA = "no")
+  max(tab) / sum(tab)
+}
+calc_entropy <- function(x, K) {
+  if (length(x) == 0) return(NA)
+  tab <- table(x, useNA = "no")
+  p <- as.numeric(tab) / sum(tab)
+  H <- -sum(p * log(p))
+  H / log(K)
+}
+
+K_cca   <- n_distinct(metacell_annotated$cca_clusters)
+K_label <- n_distinct(metacell_annotated$cell_label)
+
+metacell_summary <- metacell_annotated %>%
+  # mcRigor_sc and is_ref are intentionally excluded from the summary
+  group_by(orig.ident, Metacell) %>%
+  summarise(
+    sample = first(orig.ident),
+    individual = first(individual),
+    treatment  = first(treatment),
+    mcRigor_sc = first(mcRigor_sc),
+
+    cca_clusters_major   = major_category(cca_clusters),
+    cca_clusters_purity  = calc_purity(cca_clusters),
+    cca_clusters_entropy = calc_entropy(cca_clusters, K_cca),
+
+    cell_label_major   = major_category(cell_label),
+    cell_label_purity  = calc_purity(cell_label),
+    cell_label_entropy = calc_entropy(cell_label, K_label),
+
+    dist_to_reference_mean = mean(dist_to_reference, na.rm = TRUE),
+    dist_to_reference_sd   = sd(dist_to_reference, na.rm = TRUE),
+
+    n_cells = n(),
+
+    .groups = "drop"
+  ) %>% select(-orig.ident)
+
+# cell_label as factor (with custom levels)
+cell_levels <- c(cell_order, setdiff(metacell_summary$cell_label_major, cell_order) %>% sort)
+metacell_summary$cell_label_major %<>% factor(levels = cell_levels)
+metacell_summary$mcRigor_sc %<>% factor(levels = c("trustworthy", "dubious"))
+
+# convert other character columns to factor
+for (col_name in  select(metacell_summary, where(is.character)) %>% colnames) {
+  metacell_summary[[col_name]] %<>% factor
+}
+metacell_summary
+```
+
+## Visualization
+
+### SD\~Mean scatter plot of "distance to reference cells". Colors show the purity metrics of cell label.
+
+1.  Purity score
+
+    ```{r}
+    p_purity <- ggplot(
+        metacell_summary,
+        aes(
+          x = dist_to_reference_mean,
+          y = dist_to_reference_sd,
+          col = cell_label_purity
+        )
+      ) + 
+      geom_point(
+        size=.5
+      ) +
+      geom_smooth(
+        formula = y ~ x, 
+        method = "lm"
+      ) + 
+      scale_color_viridis_c(
+        direction = -1
+      ) +
+      theme_classic(
+      ) +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      ) +
+      labs(
+        x = "Average distance to reference cell",
+        y = "SD of distance to reference cell",
+        col = "Purity score"
+      )
+
+    # save figure
+    ggsave(
+      p_purity,
+      filename = file.path(path_outdir, "sd~mean_purity.png"),
+      width = 8,
+      height = 6,
+      unit = "in",
+      dpi = 1000
+    )
+
+    p_purity
+    ```
+
+<!-- -->
+
+2.  Normalized Shannon Entropy
+
+    ```{r}
+    p_entropy <- ggplot(
+        metacell_summary,
+        aes(
+          x = dist_to_reference_mean,
+          y = dist_to_reference_sd,
+          col = cell_label_entropy
+        )
+      ) + 
+      geom_point(
+        size=.5
+      ) +
+      geom_smooth(
+        formula = y ~ x, 
+        method = "lm"
+      ) + 
+      scale_color_viridis_c(
+      ) +
+      theme_classic(
+      ) +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      ) +
+      labs(
+        x = "Average distance to reference cell",
+        y = "SD of distance to reference cell",
+        col = "Normalized\nShannon Entropy"
+      )
+
+    # save figure
+    ggsave(
+      p_entropy,
+      filename = file.path(path_outdir, "sd~mean_entropy.png"),
+      width = 8,
+      height = 6,
+      unit = "in",
+      dpi = 1000
+    )
+
+    p_entropy
+    ```
+
+### Numbers of trustworthy/dubious metacells per cell label per treatment
+
+```{r}
+p_bar <- ggplot(
+    metacell_summary,
+    aes(
+      x = cell_label_major,
+      fill = mcRigor_sc
+    )
+  ) +
+  geom_bar(
+    width = 0.6,
+    position = position_dodge(0.8, preserve = "single")
+  ) +
+  theme_linedraw(
+  ) + 
+  scale_fill_manual(
+    values = c(
+      "trustworthy" = "#72caed", 
+      "dubious" = "#f57d81"
+    )
+  ) + 
+  facet_grid(
+    individual ~ treatment
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1)
+  ) +
+  labs(
+    x = "Major cell label",
+    y = "Number of metacells",
+    fill = "McRigor"
+  ) 
+
+# save figure
+ggsave(
+  p_bar,
+  filename = file.path(path_outdir, "number_of_metacells.png"),
+  width = 10,
+  height = 10,
+  unit = "in",
+  dpi = 1000
+)
+
+# print figure
+p_bar
+```
+
+### Box plot of cell type purity metrics
+
+1.  Purity score
+
+    ```{r}
+    p_box_purity <- ggplot(
+        metacell_summary,
+        aes(
+          x = cell_label_major,
+          y = cell_label_purity,
+          fill = mcRigor_sc
+        )
+      ) + 
+      geom_boxplot(
+        position = position_dodge(0.8, preserve = "single"),
+        width = 0.6
+      ) +
+      scale_fill_manual(
+        values = c(
+          "trustworthy" = "#72caed", 
+          "dubious" = "#f57d81"
+        )
+      ) + 
+      facet_grid(
+        individual ~ treatment
+      ) +
+      theme_linedraw(
+      ) + 
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      ) +
+      labs(
+        x = "Major cell label",
+        y = "Purity score",
+      )
+
+    # save figure
+    ggsave(
+      p_box_purity,
+      filename = file.path(path_outdir, "boxplot_purity.png"),
+      width = 10,
+      height = 10,
+      unit = "in",
+      dpi = 1000
+    )
+
+    p_box_purity
+    ```
+
+2.  Normalized Shannon Entropy
+
+    ```{r}
+    p_box_entropy <- ggplot(
+        metacell_summary,
+        aes(
+          x = cell_label_major,
+          y = cell_label_entropy,
+          fill = mcRigor_sc
+        )
+      ) + 
+      geom_boxplot(
+        position = position_dodge(0.8, preserve = "single"),
+        width = 0.6
+      ) +
+      scale_fill_manual(
+        values = c(
+          "trustworthy" = "#72caed", 
+          "dubious" = "#f57d81"
+        )
+      ) + 
+      facet_grid(
+        individual ~ treatment
+      ) +
+      theme_linedraw(
+      ) + 
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      ) +
+      labs(
+        x = "Major cell label",
+        y = "Normalized Shannon Entropy",
+      )
+
+    # save figure
+    ggsave(
+      p_box_entropy,
+      filename = file.path(path_outdir, "boxplot_entropy.png"),
+      width = 10,
+      height = 10,
+      unit = "in",
+      dpi = 1000
+    )
+
+    p_box_entropy
+    ```
+
+## Filter Metacell with too high normalized entropy
+
+-   McRigor classification indicates whether a metacell is statistically homogeneous
+
+-   Normalized Entropy of cell type labels quantifies whether a metacell is representative of a single discrete cell type
+
+Check if "trustworthy", yet "high entropy" metacells were at the junction of discrete cell types
+
+```{r}
+seurat_obj <- subset(
+  seurat_obj,
+  seurat_obj$orig.ident %in% unique(cell_type_annotation$orig.ident)
+)
+seurat_obj$cell_label <- cell_type_annotation[Cells(seurat_obj), "cell_label"]
+seurat_obj$cell_label %<>% factor(levels = cell_order)
+
+emb <- Embeddings(seurat_obj, "umap.cca_seed17") %>% as.data.frame
+colnames(emb) <- c("UMAP_1", "UMAP_2")
+emb$Metacell <- metacell_annotated[row.names(emb), "Metacell"]
+emb$sample <- metacell_annotated[row.names(emb), "orig.ident"]
+metacell_coordinates <- emb %>% 
+  group_by(sample, Metacell) %>%
+  summarize(
+    "UMAP_1" = median(UMAP_1),
+    "UMAP_2" = median(UMAP_2),
+    .groups = "drop"
+  )
+metacell_coordinates <- full_join(
+  metacell_coordinates,
+  metacell_summary,
+  by = c("Metacell", "sample")
+)
+```
+
+```{r}
+p_umap <- DimPlot(
+    seurat_obj, 
+    group.by = "cell_label",
+    cols = palette,
+    reduction = "umap.cca_seed17"
+  ) +
+  theme(
+    legend.position = "top"
+  ) +
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2",
+    col = "Cell label",
+    title = NULL
+  )
+p_label_entropy <- ggplot(
+    data = metacell_coordinates,
+    aes(
+      x = UMAP_1,
+      y = UMAP_2,
+      col = cell_label_entropy
+    )
+   ) + 
+  geom_point(
+  ) + 
+  scale_color_viridis_c(
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    legend.position = "bottom"
+  ) +
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2",
+    col = "Normalized Entropy (Cell label)"
+  )
+p_mcrigor <- ggplot(
+    data = metacell_coordinates,
+    aes(
+      x = UMAP_1,
+      y = UMAP_2,
+      col = mcRigor_sc
+    )
+   ) + 
+  geom_point(
+  ) + 
+  scale_color_manual(
+    values = c(
+      "trustworthy" = "#72caed", 
+      "dubious" = "#f57d81"
+    )
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    legend.position = "bottom"
+  ) +
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2",
+    col = "mcRigor"
+  )
+p4 <- ggplot(
+    data = metacell_coordinates,
+    aes(
+      x = UMAP_1,
+      y = UMAP_2,
+      col = cell_label_major
+    )
+   ) + 
+  geom_point(
+  ) + 
+  scale_color_manual(
+    values = palette
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    legend.position = "none"
+  ) +
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2",
+    col = "Cell label",
+    title = "Metacells (Cell label determined via majority voting)"
+  )
+
+patch <- (p_umap | p4) / (p_mcrigor | p_label_entropy)
+
+ggsave(
+  patch,
+  filename = file.path(path_outdir, "umap_overlay.png"),
+  width = 12,
+  height = 12,
+  unit = "in",
+  dpi = 1000
+)
+
+patch
+```
