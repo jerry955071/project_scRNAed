@@ -64,7 +64,8 @@ rule mcrigor:
                 sample_name = '{params.sample_name}',
                 Ks = '{params.Ks}',
                 alphas = '{params.alphas}',
-                path_output = '{output.out_dir}'
+                path_output = '{output.out_dir}',
+                path_mc_label_template = 'outputs/MetaCell/metacell/{{sample}}/K={{K}}/alpha={{alpha}}/metacell.csv'
             )
         )" 2>&1 > {log}
         """
@@ -90,3 +91,123 @@ rule aggregate_metacell_vartrix:
         "logs/MetaCell/aggregate_metacell_vartrix/{sample}.log"
     script:
         "scripts/aggregate_metacell_vartrix.R"
+
+rule seurat_integration:
+    threads: 1
+    resources:
+        mem_mb=30000,
+        runtime=100
+    container: "docker://chiaenu/rstudio-mcrigor:1.0"
+    output:
+        out_dir=directory("outputs/notebooks-new/Seurat_integration/"),
+        path_seurat_rds="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds",
+        path_cca_embedding="outputs/notebooks-new/Seurat_integration/cca_embedding.csv"
+    log:
+        "logs/MetaCell/seurat_integration.log"
+    shell:
+        """
+        # 
+        Rscript -e "rmarkdown::render(
+            'notebooks-new/Seurat_integration.Rmd',
+            output_dir = '{output.out_dir}',
+            output_file = 'seurat_integration.html',
+            knit_root_dir = '~',
+            params = list(
+                path_seurat_rds = '{output.path_seurat_rds}',
+                path_h5='outputs/CellRanger/count/{{sample}}/outs/filtered_feature_bc_matrix.h5',
+                path_cca_embedding='{output.path_cca_embedding}',
+                path_outdir='{output.out_dir}'
+            )
+        )" 2>&1 > {log}
+        """
+
+rule setup_reference_cell_label:
+    input:
+        cell_label_reference="references/ptr_tenx_batch1_rs17_curated.csv"
+    output:
+        cell_label_out="references/ptr_tenx_batch1_rs17_curated_named.csv"
+    log:
+        "logs/MetaCell/setup_reference_cell_label.log"
+    run:
+        import pandas as pd
+        cluster_mapping = {
+            1: "Vessel",
+            2: "FuIP",
+            3: "RO",
+            4: "RP",
+            5: "FuEP",
+            6: "FuO",
+            7: "Fiber",
+            8: "Ray",
+            9: "Outlier_9",
+            10: "Outlier_10",
+            11: "Outlier_11"
+        }
+        df = pd.read_csv(input.cell_label_reference)
+        df["Label"] = df["Cluster"].map(cluster_mapping)
+        df.to_csv(output.cell_label_out, index=False)
+
+rule cell_type_annotation:
+    threads: 1
+    resources:
+        mem_mb=30000,
+        runtime=100
+    container: "docker://chiaenu/rstudio-mcrigor:1.0"
+    input:
+        integrated_seurat_rds="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds",
+        cell_label_reference="references/ptr_tenx_batch1_rs17_curated_named.csv"
+    output:
+        out_dir=directory("outputs/notebooks-new/Cell_type_annotation/"),
+        path_cell_type_csv="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv"
+    params:
+        ref_name="ptr_tenx_batch1"
+    log:
+        "logs/MetaCell/cell_type_annotation.log"
+    shell:
+        """
+        Rscript -e "rmarkdown::render(
+            'notebooks-new/Cell_type_annotation.Rmd',
+            output_dir = '{output.out_dir}',
+            output_file = 'cell_type_annotation.html',
+            knit_root_dir = '~',
+            params = list(
+                path_cell_type_csv = '{output.path_cell_type_csv}',
+                path_seurat_rds='{input.integrated_seurat_rds}',
+                path_cell_label_reference='{input.cell_label_reference}',
+                ref_name='{params.ref_name}',
+                path_outdir='{output.out_dir}'
+            )
+        )" 2>&1 > {log}
+        """
+
+rule metacell_label_annotation:
+    threads: 1
+    resources:
+        mem_mb=30000,
+        runtime=100
+    container: "docker://chiaenu/rstudio-mcrigor:1.0"
+    input:
+        mc_label_template="outputs/MetaCell/mcrigor/{{sample}}/metacell.csv",
+        cell_type_annotation="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv",
+        seurat_obj="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds"
+    output:
+        out_dir=directory("outputs/MetaCell/metacell_label_annotation"),
+        path_metacell_annotated="outputs/MetaCell/metacell_label_annotation/metacell_annotation.csv"
+    log:
+        "logs/MetaCell/metacell_label_annotation.log"
+    shell:
+        """
+        Rscript -e "rmarkdown::render(
+            'notebooks-new/Metacell_label_annotation.Rmd',
+            output_dir = '{output.out_dir}',
+            output_file = 'metacell_label_annotation.html',
+            knit_root_dir = '~',
+            params = list(
+                path_metacell_annotated = '{output.path_metacell_annotated}',
+                path_mc_label_template='{input.mc_label_template}',
+                path_cell_type_annotation='{input.cell_type_annotation}',
+                path_seurat_obj='{input.seurat_obj}',
+                path_outdir='{output.out_dir}'
+            )
+        )" 2>&1 > {log}
+        """
