@@ -21,6 +21,7 @@ include: "workflows/LCM-RNA-editing.smk"
 include: "workflows/Bulk-scRNA-editing.smk"
 include: "workflows/VariantAnnotation.smk"
 include: "workflows/MetaCell.smk"
+include: "workflows/DifferentialAnalysis.smk"
 
 # Custom functions used by all workflows
 from typing import List
