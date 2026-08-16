@@ -1,0 +1,152 @@
+---
+params:
+  path_cca_embedding: str
+  path_cell_type_csv: str
+  path_pseudo_time: str
+  path_lineage_weight: str
+  path_outdir: str
+---
+
+NOTE: Run with docker image chiaenu/rmd-slingshot:2.4.0
+
+This R markdown is used to perform pseudo-time inference using Slingshot 2.4.0 on
+Seurat integrated CCA embeddings following this tutorial: 
+https://nbisweden.github.io/workshop-archive/workshop-scRNAseq/2020-01-27/labs/compiled/slingshot/slingshot.html
+
+# Setups
+
+```{r Setups}
+library(slingshot)
+library(magrittr)
+
+cell_order <- c("FuO", "RO", "FuEP", "RP", "FuIP", "Ray", "Vessel", "Fiber")
+palette <- c(
+  "#9467BD",
+  "#FF7F0F",
+  "#2AA02A",
+  "#F8E71C",
+  "#8C564B",
+  "#E377C2",
+  "#1F77B4",
+  "#D62728",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4",
+  "#d4d4d4"
+)
+```
+
+## Parse Rmd parameters
+
+```{r Parse Rmd parameters}
+# debug only:
+# path_cca_embedding <- "outputs/notebooks-new/Seurat_integration/cca_embedding.csv"
+# path_cell_type_csv <- "outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv"
+# path_pseudo_time <- "outputs/notebooks-new/Slingshot/pseudotime.csv"
+# path_lineage_weight <- "outputs/notebooks-new/Slingshot/weight.csv"
+# path_outdir <- "outputs/notebooks-new/Slingshot"
+
+path_cca_embedding <- params$path_cca_embedding
+path_cell_type_csv <- params$path_cell_type_csv
+path_pseudo_time <- params$path_pseudo_time
+path_lineage_weight <- params$path_lineage_weight
+path_outdir <- params$path_outdir
+```
+
+Create output directory
+
+```{r Create output directory}
+dir.create(path_outdir, recursive = TRUE, showWarnings = FALSE)
+```
+
+# Analysis
+
+Read data
+
+```{r Read data}
+# clusters
+foo <- read.csv(path_cell_type_csv, row.names = 1)
+clusters <- foo$cell_label
+clusters[!clusters %in% cell_order] <- "-1" # mark unknown cell types as -1
+names(clusters) <- row.names(foo)
+clusters <- as.factor(clusters)
+
+# embedding
+emb <- read.csv(path_cca_embedding, row.names = 1)
+```
+
+## Run Slingshot
+
+Construct lineage object
+
+```{r Construct lineage}
+lineages <- new("SlingshotDataSet")
+
+# add cell embedding
+lineages@reducedDim <- as.matrix(emb)
+
+# add cluster matrix
+mtx_clus <- matrix(0, nrow=length(clusters), ncol=length(levels(clusters)))
+row.names(mtx_clus) <- names(clusters)
+colnames(mtx_clus) <- levels(clusters)
+for (i in seq(length(clusters))) {
+  mtx_clus[names(clusters)[i], clusters[i]] <- 1
+}
+lineages@clusterLabels <- mtx_clus
+
+# add lineages
+lineages@lineages <- list(
+  "Lineage1" = c("FuO", "FuEP", "FuIP", "Fiber"),
+  "Lineage2" = c("RO", "RP", "Ray")
+)
+
+# add adjacency matrix
+mtx_adj <- matrix(0, nrow = length(levels(clusters)), ncol = length(levels(clusters)))
+row.names(mtx_adj) <- colnames(mtx_adj) <- levels(clusters)
+for (l_i in lineages@lineages) {
+  for (c_i in seq(length(l_i) - 1)) {
+    mtx_adj[l_i[c_i], l_i[c_i + 1]] <- 1
+    mtx_adj[l_i[c_i + 1], l_i[c_i]] <- 1
+  }
+}
+lineages@adjacency <- mtx_adj
+
+# print lineages
+print(lineages)
+```
+
+Fit curves
+
+```{r getCurves}
+curves <- getCurves(
+  lineages,
+  approx_points = 200
+) %>% SlingshotDataSet
+```
+
+Pseudo-time inference
+
+```{r Pseudo-time inference}
+pseudotime <- slingPseudotime(
+    curves,
+    na = FALSE
+)
+weight <- slingCurveWeights(
+    curves
+)
+```
+
+## Export the pseudo-time & lineage-weight matrix 
+
+```{r Export}
+write.csv(
+  pseudotime,
+  path_pseudo_time
+)
+write.csv(
+  weight,
+  path_lineage_weight
+)
+```
