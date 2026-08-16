@@ -1,0 +1,310 @@
+---
+params:
+  path_cell_type_csv: str
+  path_seurat_rds: str
+  path_cell_label_reference: str
+  ref_name: str
+  path_outdir: str
+---
+
+# Annotate single-cell cell type based on Tung et al. 2023
+
+## Setup
+
+```{r}
+library(Seurat)
+library(magrittr)
+library(RANN)
+library(ggplot2)
+library(dplyr)
+```
+
+## Parse params
+
+```{r}
+path_cell_type_csv <- params$path_cell_type_csv
+path_seurat_rds <- params$path_seurat_rds
+path_cell_label_reference <- params$path_cell_label_reference
+path_outdir <- params$path_outdir
+ref_name <- params$ref_name
+```
+
+Create output directory
+
+```{r}
+dir.create(path_outdir)
+```
+
+
+Cosmetic cell order
+
+```{r}
+cell_order <- c("FuO", "RO", "FuEP", "RP", "FuIP", "Ray", "Vessel", "Fiber")
+```
+
+
+
+## Import data
+
+```{r}
+seurat_obj <- readRDS(path_seurat_rds)
+cell_label_reference <- read.csv(path_cell_label_reference, row.names = 1)
+```
+
+## Find the nearest reference cell in the integrated space
+
+Extract integrated embedding
+
+```{r}
+int_embeddings <- Embeddings(seurat_obj, reduction = "integrated.cca")[, 1:30]
+```
+
+Set reference
+
+```{r}
+is_ref <- seurat_obj$orig.ident == ref_name
+seurat_obj$is_ref <- is_ref
+```
+
+Perform NN search
+
+```{r}
+ref_coords <- int_embeddings[is_ref, ]
+query_coords <- int_embeddings[!is_ref, ]
+nn_search <- RANN::nn2(
+  data = ref_coords,
+  query = query_coords,
+  k = 1
+)
+```
+
+Search result
+
+```{r}
+query_nn_df <- data.frame(
+  query_cell = rownames(query_coords),
+  nearest_ref_cell = rownames(ref_coords)[nn_search$nn.idx[, 1]],
+  distance = nn_search$nn.dists[, 1]
+)
+```
+
+Map ref cell barcode to label
+
+```{r}
+query_nn_df["Label"] <- cell_label_reference[
+  query_nn_df$nearest_ref_cell %>% gsub("_[0-9]$", "", .),
+  "Label"
+]
+query_nn_df[is.na(query_nn_df["Label"]), "Label"] <- "CR_filtered"
+```
+
+Update Metadata
+
+```{r}
+nn_label <- rep(NA, Cells(seurat_obj) %>% length)
+nn_dist <- rep(NA, Cells(seurat_obj) %>% length)
+names(nn_label) <- Cells(seurat_obj)
+names(nn_dist) <- Cells(seurat_obj)
+nn_label[query_nn_df$query_cell] <- query_nn_df$Label
+nn_dist[query_nn_df$query_cell] <- query_nn_df$distance
+nn_label[row.names(ref_coords)] <- cell_label_reference[
+  row.names(ref_coords) %>% gsub("_[0-9]$", "", .),
+  "Label"
+]
+nn_dist[row.names(ref_coords)] <- 0
+nn_label[is.na(nn_label)] <- "CR_filtered"
+seurat_obj$cell_label <- factor(nn_label, levels = append(
+    cell_order, setdiff(unique(nn_label), cell_order)
+  )
+)
+seurat_obj$dist_to_reference <- nn_dist
+```
+
+## Summarize cell lable transfer
+
+Color by individual
+
+```{r}
+data_plot <- seurat_obj@meta.data[!is_ref, ]
+p <- ggplot(
+    data_plot, 
+    aes(
+      x = cell_label,
+      y = dist_to_reference,
+      fill = individual
+    )
+  ) + 
+  geom_boxplot(
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  labs(
+    x = "Cell type",
+    y = "Distance to reference",
+    fill = "Individual"
+  )
+p
+ggsave(
+  file.path(path_outdir, "distance_to_reference_pre_filter.png"),
+  p,
+  width = 12,
+  height = 6
+)
+```
+
+## Filter for each cell type the farthest 5% cells to reference
+
+```{r}
+meta <- seurat_obj@meta.data
+# calculate threshold per cell label
+thresholds <- meta %>%
+  filter(!is_ref) %>% 
+  group_by(cell_label) %>%
+  summarise(
+    top_5_cutoff = quantile(dist_to_reference, probs = 0.95, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# update metadata
+meta_updated <- meta %>%
+  mutate(cell_barcode = rownames(.)) %>%
+  left_join(thresholds, by = "cell_label") %>%
+  mutate(cell_label = if_else(
+    !is_ref & !is.na(top_5_cutoff) & dist_to_reference >= top_5_cutoff,
+    "unannotated",
+    cell_label
+  ))
+
+rownames(meta_updated) <- meta_updated$cell_barcode
+seurat_obj@meta.data <- meta_updated %>% select(-cell_barcode, -top_5_cutoff)
+seurat_obj$cell_label <- factor(
+  seurat_obj$cell_label, 
+  levels = append(cell_order, setdiff(unique(seurat_obj$cell_label), cell_order))
+)
+```
+
+## Check cell label after filtration
+
+```{r}
+data_plot <- seurat_obj@meta.data[!is_ref, ]
+p <- ggplot(
+    data_plot, 
+    aes(
+      x = cell_label,
+      y = dist_to_reference,
+      fill = individual
+    )
+  ) + 
+  geom_boxplot(
+  ) +
+  theme_classic(
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  labs(
+    x = "Cell type",
+    y = "Distance to reference",
+    fill = "Individual"
+  )
+p
+ggsave(
+  file.path(path_outdir, "distance_to_reference_filtered.png"),
+  p,
+  width = 12,
+  height = 6
+)
+```
+
+Visualize cell label on UMAP
+
+```{r}
+p <- DimPlot(
+    seurat_obj,
+    reduction = "umap.cca_seed17",
+    cols = c(
+      "#9467BD",
+      "#FF7F0F",
+      "#2AA02A",
+      "#F8E71C",
+      "#8C564B",
+      "#E377C2",
+      "#1F77B4",
+      "#D62728",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4"
+    ),
+    pt.size = 2,
+    group.by = "cell_label",
+    split.by = "is_ref"
+  ) + labs(
+    x = "UMAP 1",
+    y = "UMAP 2"
+  )
+ggsave(
+  file.path(path_outdir, "umap_cell_label_ref_and_query.png"),
+  p,
+  width = 12,
+  height = 6,
+  units = "in",
+  dpi = 1000
+)
+p
+```
+
+```{r}
+ncol_plot <- seurat_obj$orig.ident %>% unique %>% length %>% sqrt %>% round
+p <- DimPlot(
+    seurat_obj,
+    reduction = "umap.cca_seed17",
+    ncol = ncol_plot,
+    cols = c(
+      "#9467BD",
+      "#FF7F0F",
+      "#2AA02A",
+      "#F8E71C",
+      "#8C564B",
+      "#E377C2",
+      "#1F77B4",
+      "#D62728",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4",
+      "#d4d4d4"
+    ),
+    pt.size = 2,
+    group.by = "cell_label",
+    split.by = "orig.ident"
+  ) + labs(
+    x = "UMAP 1",
+    y = "UMAP 2"
+  )
+ggsave(
+  file.path(path_outdir, "umap_cell_label_by_sample.png"),
+  p,
+  width = 1 + 5 * (seurat_obj$orig.ident %>% unique %>% length) %/% ncol_plot,
+  height = 2 + 5 * ncol_plot,
+  units = "in",
+  dpi = 1000
+)
+p
+```
+
+Export Cell label
+
+```{r}
+write.csv(
+  seurat_obj@meta.data %>% filter(!is_ref) %>% select(-nCount_RNA, -nFeature_RNA),
+  path_cell_type_csv,
+  quote = FALSE
+)
+```
