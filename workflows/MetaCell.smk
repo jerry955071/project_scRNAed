@@ -180,34 +180,126 @@ rule cell_type_annotation:
         )" 2>&1 > {log}
         """
 
-rule metacell_label_annotation:
+# rule metacell_label_annotation:
+#     threads: 1
+#     resources:
+#         mem_mb=30000,
+#         runtime=100
+#     container: "docker://chiaenu/rstudio-mcrigor:1.0"
+#     input:
+#         mc_label_template="outputs/MetaCell/mcrigor/%s/metacell.csv",
+#         cell_type_annotation="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv",
+#         seurat_obj="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds"
+#     output:
+#         out_dir=directory("outputs/MetaCell/metacell_label_annotation"),
+#         path_metacell_annotated="outputs/MetaCell/metacell_label_annotation/metacell_annotation.csv"
+#     log:
+#         "logs/MetaCell/metacell_label_annotation.log"
+#     shell:
+#         """
+#         Rscript -e "rmarkdown::render(
+#             'notebooks-new/Metacell_label_annotation.Rmd',
+#             output_dir = '{output.out_dir}',
+#             output_file = 'metacell_label_annotation.html',
+#             knit_root_dir = '~',
+#             params = list(
+#                 path_metacell_annotated = '{output.path_metacell_annotated}',
+#                 path_mc_label_template='{input.mc_label_template}',
+#                 path_cell_type_annotation='{input.cell_type_annotation}',
+#                 path_seurat_obj='{input.seurat_obj}',
+#                 path_outdir='{output.out_dir}'
+#             )
+#         )" 2>&1 > {log}
+#         """
+
+# get pseudo-time cell ordering
+rule slingshot:
     threads: 1
     resources:
-        mem_mb=30000,
-        runtime=100
-    container: "docker://chiaenu/rstudio-mcrigor:1.0"
+        mem_mb=10000,
+        runtime=200
+    container: "docker://chiaenu/rmd-slingshot:2.4.0"
     input:
-        mc_label_template="outputs/MetaCell/mcrigor/{{sample}}/metacell.csv",
-        cell_type_annotation="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv",
-        seurat_obj="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds"
+        path_cca_embedding="outputs/notebooks-new/Seurat_integration/cca_embedding.csv",
+        path_cell_type_csv="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv"
     output:
-        out_dir=directory("outputs/MetaCell/metacell_label_annotation"),
-        path_metacell_annotated="outputs/MetaCell/metacell_label_annotation/metacell_annotation.csv"
+        path_pseudo_time="outputs/notebooks-new/Slingshot/pseudotime.csv",
+        path_lineage_weight="outputs/notebooks-new/Slingshot/weight.csv",
+        path_lineage_prob="outputs/notebooks-new/Slingshot/prob.csv",
+        path_branch_id="outputs/notebooks-new/Slingshot/branch_id.csv",
+        path_outdir=directory("outputs/notebooks-new/Slingshot")
+    params:
+        DEBUG="FALSE"
     log:
-        "logs/MetaCell/metacell_label_annotation.log"
+        "logs/DifferentialAnalysis/slingshot.log"
     shell:
         """
         Rscript -e "rmarkdown::render(
-            'notebooks-new/Metacell_label_annotation.Rmd',
-            output_dir = '{output.out_dir}',
-            output_file = 'metacell_label_annotation.html',
+            'notebooks-new/Slingshot.Rmd',
+            output_dir = '{output.path_outdir}',
+            output_file = 'slingshot.html',
             knit_root_dir = '~',
             params = list(
-                path_metacell_annotated = '{output.path_metacell_annotated}',
-                path_mc_label_template='{input.mc_label_template}',
-                path_cell_type_annotation='{input.cell_type_annotation}',
-                path_seurat_obj='{input.seurat_obj}',
-                path_outdir='{output.out_dir}'
+                path_cca_embedding = '{input.path_cca_embedding}',
+                path_cell_type_csv='{input.path_cell_type_csv}',
+                path_pseudo_time='{output.path_pseudo_time}',
+                path_lineage_weight='{output.path_lineage_weight}',
+                path_lineage_prob='{output.path_lineage_prob}',
+                path_branch_id='{output.path_branch_id}',
+                path_outdir='{output.path_outdir}',
+                DEBUG={params.DEBUG}
+            )
+        )" 2>&1 > {log}
+        """
+
+
+# summarize metacell pseudotime/cell labels for downstream differential analysis
+def call_mc_label_files(wildcards):
+    import pandas as pd
+    df = pd.read_csv("outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv")
+    samples = df["orig.ident"].unique()
+    return [f"outputs/MetaCell/mcrigor/{s}/metacell.csv" for s in samples]
+
+rule metacell_summary:
+    threads: 1
+    resources:
+        mem_mb=30000,
+        runtime=200
+    container: "docker://chiaenu/rstudio-rstat:4.4.3"
+    input:
+        path_mc_label=call_mc_label_files,
+        path_cell_type_annotation="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv",
+        path_pseudo_time="outputs/notebooks-new/Slingshot/pseudotime.csv",
+        path_lineage_weight="outputs/notebooks-new/Slingshot/weight.csv",
+        path_lineage_prob="outputs/notebooks-new/Slingshot/prob.csv",
+        path_branch_id="outputs/notebooks-new/Slingshot/branch_id.csv",
+        path_seurat_obj="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds"
+    output:
+        path_outdir=directory("outputs/MetaCell/metacell_summary"),
+        path_metacell_metadata="outputs/MetaCell/metacell_summary/metacell_metadata.csv"
+    params:
+        DEBUG="FALSE",
+        path_mc_label_template="outputs/MetaCell/mcrigor/%s/metacell.csv"
+    log:
+        "logs/DifferentialAnalysis/metacell_summary.log"
+    shell:
+        """
+        Rscript -e "rmarkdown::render(
+            'notebooks-new/Metacell_trajectory_weight.Rmd',
+            output_dir = '{output.path_outdir}',
+            output_file = 'metacell_summary.html',
+            knit_root_dir = '~',
+            params = list(
+                path_mc_label_template='{params.path_mc_label_template}',
+                path_cell_type_annotation='{input.path_cell_type_annotation}',
+                path_pseudo_time='{input.path_pseudo_time}',
+                path_lineage_weight='{input.path_lineage_weight}',
+                path_lineage_prob='{input.path_lineage_prob}',
+                path_branch_id='{input.path_branch_id}',
+                path_seurat_obj='{input.path_seurat_obj}',
+                path_outdir='{output.path_outdir}',
+                path_metacell_metadata='{output.path_metacell_metadata}',
+                DEBUG='{params.DEBUG}'
             )
         )" 2>&1 > {log}
         """
