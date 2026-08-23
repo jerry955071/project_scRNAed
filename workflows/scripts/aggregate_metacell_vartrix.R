@@ -55,13 +55,17 @@ mc_ref_mtx <- AggregateExpression(ref_mtx, assays="RNA", group.by = "Metacell")$
 # write aggregated alt/ref mtx to file
 writeMM(mc_alt_mtx, file = path_out_alt)
 writeMM(mc_ref_mtx, file = path_out_ref)
-write.csv(
+write.table(
   data.frame(dimname_1 = mc_alt_mtx@Dimnames[[1]]),
-  path_out_row
+  path_out_row,
+  col.names = FALSE,
+  row.names = FALSE
 )
-write.csv(
+write.table(
   data.frame(dimname_1 = mc_alt_mtx@Dimnames[[2]]),
-  path_out_col
+  path_out_col,
+  col.names = FALSE,
+  row.names = FALSE
 )
 
 # Cleanup connections
