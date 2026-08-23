@@ -17,12 +17,37 @@ for volume in config["volumes"]:
     if volume["is_workspace"]:
         docker_mount += "-w %s " % volume["container"]
 
-# TODO: 
-# Put tests/test-VariantAnnotation/Variant-annotation.Rmd &
-# make-modified-ref.sh here
+# TODO: Add rule for running make-modified-ref.sh
+rule make_modified_ref:
+    input:
+        "TODO"
+
+rule variant_annotation:
+    container: "docker://biocontainers/bioconductor-variantannotation:v1.20.2-1b1-deb_cv1"
+    threads: 1
+    resources:
+        mem_mb=100000,
+        runtime=100
+    input:
+        path_ref=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
+        path_gff=lambda wildcards: query(config["references"], "species", wildcards.species)["annotation-gff"],
+        path_hom="outputs/VariantCalling-DNA/gatk_joint/{species}/hom_ref.vcf",
+        path_rna_variants="outputs/VariantAnnotation/bcftools_merge/{species}.vcf"
+    output:
+        path_rna_editing_vcf="outputs/VariantAnnotation/variant_annotation/{species}/rna_editing.vcf.bgz",
+        path_variant_location="outputs/VariantAnnotation/variant_annotation/{species}/variant_location.txt",
+        path_variant_annotation="outputs/VariantAnnotation/variant_annotation/{species}/variant_annotation.txt"
+    log:
+        "logs/VariantAnnotation/variant_annotation/{species}.log"
+    params:
+        genome=lambda wildcards: wildcards.species[0].upper() + wildcards.species[1:],
+        path_rna_editing_vcf="outputs/VariantAnnotation/variant_annotation/{species}/rna_editing.vcf",
+    script:
+        "scripts/variant_annotation.R"
 
 # convert concatenated vcf to bcf files
 rule vcf_to_bcf:
+    container: "docker://staphb/bcftools:1.21"
     input:
         "outputs/VariantCalling/bcftools_concat/{sample}.vcf"
     output:
@@ -32,18 +57,11 @@ rule vcf_to_bcf:
     shell:
         """
         # convert to bcf
-        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
-            bcftools view -Ob {input} -o {output} \
-        1> {log} \
-        2> {log}
+        bcftools view -Ob {input} -o {output} > {log} 2>&1
         
         # index
-        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
-            bcftools index {output} \
-        1>> {log} \
-        2>> {log}
+        bcftools index {output} >> {log} 2>&1
         """
-
 
 # # bgzip concatenated bcf files
 # rule bgzip_concatenated:
@@ -80,6 +98,7 @@ rule vcf_to_bcf:
 
 # bcftools merge
 rule bcftools_merge:
+    container: "docker://staphb/bcftools:1.21"
     input:
         lambda wildcards: expand(
             "outputs/VariantCalling/bcftools_concat/{sample}.bcf",
@@ -96,44 +115,42 @@ rule bcftools_merge:
         "logs/VariantAnnotation/bcftools_merge/{species}.log"
     shell:
         """
-        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
-            bcftools merge \
-                -Ob \
-                -o {output} \
-                --force-samples \
-                {input} \
-            1> {log} \
-            2> {log}
+        bcftools merge \
+            -Ob \
+            -o {output} \
+            --force-samples \
+            {input} \
+        > {log} 2>&1
         """
 
-# bcftools csq
-rule bcftools_csq:
-    input:
-        bcf="outputs/VariantAnnotation/bcftools_merge/{species}.bcf",
-        reference=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
-        gff3=lambda wildcards: query(config["references"], "species", wildcards.species)["annotation-gff"]
-    output:
-        gff4csq="outputs/VariantAnnotation/bcftools_csq/{species}.gff.gz",
-        bcf="outputs/VariantAnnotation/bcftools_csq/{species}.bcf"
-    log:
-        "logs/VariantAnnotation/bcftools_csq/{species}.log"
-    shell:
-        """
-        # covert gff to format recognizable by bcftools-csq
-        cat {input.gff3} | src/bcftools-1.22/misc/gff2gff | gzip -c > {output.gff4csq}
+# # bcftools csq
+# rule bcftools_csq:
+#     input:
+#         bcf="outputs/VariantAnnotation/bcftools_merge/{species}.bcf",
+#         reference=lambda wildcards: query(config["references"], "species", wildcards.species)["assembly"],
+#         gff3=lambda wildcards: query(config["references"], "species", wildcards.species)["annotation-gff"]
+#     output:
+#         gff4csq="outputs/VariantAnnotation/bcftools_csq/{species}.gff.gz",
+#         bcf="outputs/VariantAnnotation/bcftools_csq/{species}.bcf"
+#     log:
+#         "logs/VariantAnnotation/bcftools_csq/{species}.log"
+#     shell:
+#         """
+#         # covert gff to format recognizable by bcftools-csq
+#         cat {input.gff3} | src/bcftools-1.22/misc/gff2gff | gzip -c > {output.gff4csq}
 
-        # Basic usage
-        docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
-            bcftools csq \
-                -f {input.reference} \
-                -g {output.gff4csq} \
-                -Ob \
-                -o {output.bcf} \
-                -v 2 \
-                {input.bcf} \
-            1> {log} \
-            2> {log}
+#         # Basic usage
+#         docker run {docker_mount} -u $(id -u) --rm staphb/bcftools:1.21 \
+#             bcftools csq \
+#                 -f {input.reference} \
+#                 -g {output.gff4csq} \
+#                 -Ob \
+#                 -o {output.bcf} \
+#                 -v 2 \
+#                 {input.bcf} \
+#             1> {log} \
+#             2> {log}
 
-        # bcftools query -f'[%CHROM\t%POS\t%SAMPLE\t%TBCSQ\n]' out.bcf
-        """
+#         # bcftools query -f'[%CHROM\t%POS\t%SAMPLE\t%TBCSQ\n]' out.bcf
+#         """
 
