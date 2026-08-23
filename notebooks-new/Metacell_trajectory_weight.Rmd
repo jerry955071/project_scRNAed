@@ -1,76 +1,121 @@
 ---
 params:
-  path_metacell_annotated: tests/metacell_annotation/metacell_annotation.csv
-  path_mc_label_template: outputs/MetaCell/mcrigor/{sample}/metacell.csv
-  path_cell_type_annotation: outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv
-  path_outdir: outputs/MetaCell/metacell_trajectory_weight
-  path_seurat_obj: outputs/notebooks-new/Seurat_integration/seurat_integrated.rds
+  path_metacell_annotated: str
+  path_mc_label_template: str
+  path_cell_type_annotation: str
+  path_pseudo_time: str
+  path_lineage_weight: str
+  path_lineage_prob: str
+  path_branch_id: str
+  path_seurat_obj: str
+  path_outdir: str
+  path_metacell_metadata: str
+  DEBUG: bool
 ---
 
-# Annotate Metacell cell label based on single-cell label transferred from [Tung et al.](https://doi.org/10.1186/s13059-022-02845-1)
+# Aggregate cell label and order per metacell
+
+Pseudotime was inferred using Slingshot (2.4.0) on CCA-integrated single-cell embeddings. Single-cell cell labels were transferred from nearest [Tung et al.](https://doi.org/10.1186/s13059-022-02845-1) bio1 neighbors in the same space.
 
 ## Setup
 
-```{r}
+```{r Setup}
 library(dplyr)
 library(magrittr)
-library(glue)
 library(ggplot2)
 library(patchwork)
 library(Seurat)
-library(slingshot)
 
 cell_order <- c("FuO", "RO", "FuEP", "RP", "FuIP", "Ray", "Vessel", "Fiber")
+lineages <- list(
+  "Lineage1" = c("FuO", "FuEP", "FuIP", "Fiber"),
+  "Lineage2" = c("FuO", "FuEP", "FuIP", "Vessel"),
+  "Lineage3" = c("RO", "RP", "Ray")
+)
+lineage_order <- c(
+  "Fusiform late (Fiber)",
+  "Fusiform early (Shared)",
+  "Fusiform late (Vessel)",
+  "Ray Lineage"
+)
 palette <- c(
-  "#9467BD",
-  "#FF7F0F",
-  "#2AA02A",
-  "#F8E71C",
-  "#8C564B",
-  "#E377C2",
-  "#1F77B4",
-  "#D62728",
-  "#d4d4d4",
-  "#d4d4d4",
-  "#d4d4d4",
-  "#d4d4d4",
-  "#d4d4d4",
-  "#d4d4d4"
+  "FuO" = "#9467BD",
+  "RO" = "#FF7F0F",
+  "FuEP" = "#2AA02A",
+  "RP" = "#F8E71C",
+  "FuIP" = "#8C564B",
+  "Ray" = "#E377C2",
+  "Vessel" = "#1F77B4",
+  "Fiber" = "#D62728",
+  "Outlier_9" = "#d4d4d4",
+  "Outlier_10" = "#d4d4d4",
+  "Outlier_11" = "#d4d4d4",
+  "unannotated" = "#d4d4d4"
 )
 ```
 
 ## Parse Rmd parameters
 
-```{r}
+```{r Parse Rmd parameters}
 path_metacell_annotated <- params$path_metacell_annotated
 path_mc_label_template <- params$path_mc_label_template
 path_cell_type_annotation <- params$path_cell_type_annotation
-path_outdir <- params$path_outdir
+path_pseudo_time <- params$path_pseudo_time
+path_lineage_weight <- params$path_lineage_weight
+path_lineage_prob <- params$path_lineage_prob
+path_branch_id <- params$path_branch_id
 path_seurat_obj <- params$path_seurat_obj
+path_outdir <- params$path_outdir
+path_metacell_metadata <- params$path_metacell_metadata
+DEBUG <- as.logical(params$DEBUG)
 ```
 
 ## Create output directory
 
-```{r}
-dir.create(path_outdir)
+```{r dir.create}
+dir.create(path_outdir, recursive = TRUE)
 ```
 
 ## Import data
 
-Read transferred single-cell annoation
+Read discrete cell label
 
-```{r}
+```{r Read discrete cell label}
 cell_type_annotation <- read.csv(path_cell_type_annotation, row.names = 1)
 cell_type_annotation["barcode"] <- row.names(cell_type_annotation)
-cell_type_annotation
+str(cell_type_annotation)
+```
+
+Read Slingshot output matrices (pseudotime/lineage weight/normalized lineage probability/branch id)
+
+```{r Read Slingshot output matrices}
+mtx_pseudotime <- read.csv(path_pseudo_time, row.names = 1)
+mtx_weight <- read.csv(path_lineage_weight, row.names = 1)
+mtx_prob <- read.csv(path_lineage_prob, row.names = 1)
+mtx_branch_id <- read.csv(path_branch_id, row.names = 1)
+
+colnames(mtx_pseudotime) <- paste0(colnames(mtx_pseudotime), "_pseudotime")
+colnames(mtx_weight) <- paste0(colnames(mtx_weight), "_weight")
+colnames(mtx_prob) <- paste0(colnames(mtx_prob), "_prob")
+
+mtx_pseudotime["barcode"] <- row.names(mtx_pseudotime)
+mtx_weight["barcode"] <- row.names(mtx_weight)
+mtx_prob["barcode"] <- row.names(mtx_prob)
+mtx_branch_id["barcode"] <- row.names(mtx_branch_id)
+
+mtx_slingshot <- mtx_pseudotime %>% 
+  full_join(mtx_weight, by = "barcode") %>% 
+  full_join(mtx_prob, by = "barcode") %>% 
+  full_join(mtx_branch_id, by = "barcode")
+str(mtx_slingshot)
 ```
 
 Read MetaCell membership labels
 
-```{r}
+```{r Read MetaCell membership labels}
 metacell_memberships <- data.frame()
 for (sname in unique(cell_type_annotation$orig.ident)) {
-  tmp <- read.csv(glue(path_mc_label_template, sample = sname), row.names = 1)
+  tmp <- read.csv(sprintf(path_mc_label_template, sname), row.names = 1)
   sample_suffix <- cell_type_annotation %>% 
     subset(orig.ident == sname) %>% 
     row.names %>% 
@@ -82,116 +127,82 @@ for (sname in unique(cell_type_annotation$orig.ident)) {
   metacell_memberships %<>% rbind(tmp)
 }
 metacell_memberships["barcode"] <- row.names(metacell_memberships)
-metacell_memberships
+str(metacell_memberships)
 ```
 
 ## Read Seurat object
 
-```{r}
+```{r Read Seurat object}
 seurat_obj <- readRDS(path_seurat_obj)
 seurat_obj <- subset(
-  seurat_obj, 
-  seurat_obj$orig.ident %in% unique(cell_type_annotation$orig.ident)
+  seurat_obj,
+  orig.ident %in% unique(cell_type_annotation$orig.ident)
 )
 ```
 
-## Import lineage pseudo-time
+## Merge metacell, cell label, and slingshot data frame
 
-```{r}
-
-```
-
-## Merge MetaCell membership & Cell label annotation data frame
-
-```{r}
-metacell_annotated <- full_join(
-  x = metacell_memberships,
-  y = cell_type_annotation,
-  by = "barcode"
-)
+```{r Merge MetaCell membership & Cell label annotation}
+metacell_annotated <- metacell_memberships %>% 
+  full_join(cell_type_annotation, by = "barcode") %>% 
+  full_join(mtx_slingshot, by = "barcode") 
 row.names(metacell_annotated) <- metacell_annotated$barcode
-metacell_annotated %<>% select(-barcode)
-metacell_annotated
+metacell_annotated %<>% mutate(
+  L12_shared = pmin(Lineage1_weight, Lineage2_weight),
+  L1_specific = pmax(Lineage1_weight - Lineage2_weight, 0),
+  L2_specific = pmax(Lineage2_weight - Lineage1_weight, 0)
+)
+metacell_annotated %<>%
+  mutate(
+    branch_id = case_match(
+      branch_id,
+      "1" ~ "Fusiform late (Fiber)", 
+      "2" ~ "Fusiform late (Vessel)",
+      "1,2" ~ "Fusiform early (Shared)",
+      "3" ~ "Ray Lineage",
+      "" ~ "Unknown",
+     .default = branch_id
+    )
+  )
+if (DEBUG) {metacell_annotated <- metacell_annotated[mtx_slingshot$barcode, ]}
+str(metacell_annotated)
 ```
 
-Filter NA caused by missing values during full_join
+Filter NA (cells missing in MetaCell output)
 
-(1) Find the columns containing NA
-
-```{r}
-col_na <- metacell_annotated %>% is.na %>% apply(2, any) %>% which %>% names
-col_na
+```{r Filter cells missing in MetaCell output}
+metacell_annotated %<>% subset(Metacell %>% is.na %>% not)
+str(metacell_annotated)
 ```
 
-(2) See if NA coincide per observation
+## Aggregate pseudotime and lineage weight per metacell
 
-```{r}
-metacell_annotated[, col_na] %>% is.na %>% apply(1, sum) %>% table
-```
+For each metacell $m$ and lineage $l$:
 
-(3) Exclude NA-containing rows
+-   **Lineage weight**:
 
-```{r}
-metacell_annotated %<>% 
-  subset(metacell_annotated[, col_na] %>% is.na %>% not %>% apply(1, any))
-metacell_annotated
-```
+    $$
+    W_{m,l} = \frac{1}{N_m}\sum_{c \in m} w_{c,l}
+    $$
 
-## Calculate the purity of cell types per metacell per sample
+    where $N_m$ is the total number of cells in metacell $m$, and $w_{c,l}$ is the lineage weight of cell $c$ for lineage $l$.
 
-### 1. Purity Score
+-   **Lineage-specific pseudotime**:
 
-This measures the proportion of cells belonging to the most dominant category within a metacell.
+    $$
+    T_{m,l} =
+    \frac{
+    \sum_{c \in m} w_{c,l} t_{c,l}
+    }{
+    \sum_{c \in m} w_{c,l}
+    }
+    $$
 
--   **Formula**:
+    where $t_{c,l}$ is the pseudotime of cell $c$ along lineage $l$.
 
-    $$Purity = \max_i(p_i) = \frac{N_{max}}{N_{total}}$$
+    Equivalently, because
 
--   **Interpretation**: Higher values indicate a more homogeneous metacell. A value of $1$ indicates that all cells belong to the same category.
-
--   **Example**: If a metacell contains 10 cells (8 from category A and 2 from category B), the purity is:
-
-    $$Purity = \frac{8}{10} = 0.8$$
-
-Purity is intuitive, but it only considers the abundance of the dominant category and ignores how the remaining cells are distributed among other categories.
-
-------------------------------------------------------------------------
-
-### 2. Normalized Shannon Entropy
-
-Normalized Shannon entropy measures the overall heterogeneity, or impurity, of the category composition within a metacell. Unlike purity, it considers the relative abundance of **all categories**.
-
-First, Shannon entropy is calculated as:
-
-$$H = -\sum_{i=1}^{K} p_i \log_2(p_i)$$
-
-where $p_i$ is the proportion of cells assigned to category $i$.
-
-To make entropy comparable across different annotation schemes, it is normalized by the maximum possible entropy:
-
-$$H_{norm} = \frac{-\sum_{i=1}^{K} p_i \log_2(p_i)}{\log_2(K)}$$
-
-where $K$ is the **fixed total number of possible categories in the dataset** (e.g., the total number of `cell_label` or `cca_clusters` categories), rather than the number of categories observed within an individual metacell.
-
--   **Interpretation**:
-
-    -   $H_{norm} = 0$: perfectly pure; all cells belong to one category.
-    -   $H_{norm} \rightarrow 1$: increasingly heterogeneous.
-    -   $H_{norm} = 1$: maximum heterogeneity, where cells are equally distributed among all $K$ possible categories.
-
--   **Example**: If there are two possible categories and a metacell contains 8 cells from category A and 2 cells from category B:
-
-    $$H = -(0.8\log_2(0.8) + 0.2\log_2(0.2)) \approx 0.72$$
-
-    Because $K = 2$:
-
-    $$H_{norm} = \frac{0.72}{\log_2(2)} = 0.72$$
-
-Thus, higher normalized entropy represents greater metacell impurity, whereas higher purity represents greater metacell homogeneity.
-
-For the metacell analysis, normalized entropy is used as the primary measure of impurity because it incorporates the full distribution of cell identities. Purity is retained as a complementary and readily interpretable measure of the proportion represented by the dominant category.
-
-```{r}
+```{r Aggregate data per metacell}
 major_category <- function(x) {
   tab <- table(x, useNA = "no")
   names(tab)[which.max(tab)]
@@ -207,6 +218,18 @@ calc_entropy <- function(x, K) {
   p <- as.numeric(tab) / sum(tab)
   H <- -sum(p * log(p))
   H / log(K)
+}
+weighted_sd <- function(pt, w) {
+  keep <- is.finite(pt) & is.finite(w) & w > 0
+  pt <- pt[keep]
+  w  <- w[keep]
+  if (length(pt) < 2 || sum(w) == 0)
+      return(NA_real_)
+  mu <- weighted.mean(pt, w)
+  sqrt(
+      sum(w * (pt - mu)^2) /
+    sum(w)
+  )
 }
 
 K_cca   <- n_distinct(metacell_annotated$cca_clusters)
@@ -231,11 +254,77 @@ metacell_summary <- metacell_annotated %>%
 
     dist_to_reference_mean = mean(dist_to_reference, na.rm = TRUE),
     dist_to_reference_sd   = sd(dist_to_reference, na.rm = TRUE),
-
+    
+    L1_pseudotime = weighted.mean(Lineage1_pseudotime, w = Lineage1_weight),
+    L2_pseudotime = weighted.mean(Lineage2_pseudotime, w = Lineage2_weight),
+    L3_pseudotime = weighted.mean(Lineage3_pseudotime, w = Lineage3_weight),
+    L1_weight = mean(Lineage1_weight, na.rm = TRUE),
+    L2_weight = mean(Lineage2_weight, na.rm = TRUE),
+    L3_weight = mean(Lineage3_weight, na.rm = TRUE),
+    L1_prob = mean(Lineage1_prob, na.rm = TRUE),
+    L2_prob = mean(Lineage2_prob, na.rm = TRUE),
+    L3_prob = mean(Lineage3_prob, na.rm = TRUE),
+    L1_sd = weighted_sd(Lineage1_pseudotime, w = Lineage1_weight),
+    L2_sd = weighted_sd(Lineage2_pseudotime, w = Lineage2_weight),
+    L3_sd = weighted_sd(Lineage3_pseudotime, w = Lineage3_weight),
+    
+    L12_shared   = mean(L12_shared),
+    L1_specific  = mean(L1_specific),
+    L2_specific  = mean(L2_specific),
+    
+    branch_major = major_category(branch_id),
     n_cells = n(),
 
     .groups = "drop"
   ) %>% select(-orig.ident)
+
+# aggregate pseudotime across lineages
+weighted_pt <- function(pt, prob) {
+  keep <- is.finite(pt) & is.finite(prob) & prob > 0
+
+  if (!any(keep))
+    return(NA_real_)
+
+  prob <- prob[keep] / sum(prob[keep])
+
+  sum(pt[keep] * prob)
+}
+mixture_sd <- function(pt, sd, prob) {
+  keep <- is.finite(pt) &
+          is.finite(sd) &
+          is.finite(prob) &
+          prob > 0
+
+  if (!any(keep))
+    return(NA_real_)
+
+  pt   <- pt[keep]
+  sd   <- sd[keep]
+  prob <- prob[keep] / sum(prob[keep])
+
+  mu <- sum(prob * pt)
+
+  sqrt(
+    sum(
+      prob * (sd^2 + (pt - mu)^2)
+    )
+  )
+}
+metacell_summary <- metacell_summary %>%
+  rowwise() %>%
+  mutate(
+    pseudotime = weighted_pt(
+      c(L1_pseudotime, L2_pseudotime, L3_pseudotime),
+      c(L1_prob, L2_prob, L3_prob)
+    ),
+    SD = mixture_sd(
+      c(L1_pseudotime, L2_pseudotime, L3_pseudotime),
+      c(L1_sd, L2_sd, L3_sd),
+      c(L1_prob, L2_prob, L3_prob)
+    )
+  ) %>%
+  ungroup()
+
 
 # cell_label as factor (with custom levels)
 cell_levels <- c(cell_order, setdiff(metacell_summary$cell_label_major, cell_order) %>% sort)
@@ -246,264 +335,32 @@ metacell_summary$mcRigor_sc %<>% factor(levels = c("trustworthy", "dubious"))
 for (col_name in  select(metacell_summary, where(is.character)) %>% colnames) {
   metacell_summary[[col_name]] %<>% factor
 }
-metacell_summary
+str(metacell_summary)
 ```
 
 ## Visualization
 
-### SD\~Mean scatter plot of "distance to reference cells". Colors show the purity metrics of cell label.
+### Overlay statistics on integrated UMAP embedding
 
-1.  Purity score
+Get metacell coordinates
 
-    ```{r}
-    p_purity <- ggplot(
-        metacell_summary,
-        aes(
-          x = dist_to_reference_mean,
-          y = dist_to_reference_sd,
-          col = cell_label_purity
-        )
-      ) + 
-      geom_point(
-        size=.5
-      ) +
-      geom_smooth(
-        formula = y ~ x, 
-        method = "lm"
-      ) + 
-      scale_color_viridis_c(
-        direction = -1
-      ) +
-      theme_classic(
-      ) +
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1)
-      ) +
-      labs(
-        x = "Average distance to reference cell",
-        y = "SD of distance to reference cell",
-        col = "Purity score"
-      )
-
-    # save figure
-    ggsave(
-      p_purity,
-      filename = file.path(path_outdir, "sd~mean_purity.png"),
-      width = 8,
-      height = 6,
-      unit = "in",
-      dpi = 1000
-    )
-
-    p_purity
-    ```
-
-<!-- -->
-
-2.  Normalized Shannon Entropy
-
-    ```{r}
-    p_entropy <- ggplot(
-        metacell_summary,
-        aes(
-          x = dist_to_reference_mean,
-          y = dist_to_reference_sd,
-          col = cell_label_entropy
-        )
-      ) + 
-      geom_point(
-        size=.5
-      ) +
-      geom_smooth(
-        formula = y ~ x, 
-        method = "lm"
-      ) + 
-      scale_color_viridis_c(
-      ) +
-      theme_classic(
-      ) +
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1)
-      ) +
-      labs(
-        x = "Average distance to reference cell",
-        y = "SD of distance to reference cell",
-        col = "Normalized\nShannon Entropy"
-      )
-
-    # save figure
-    ggsave(
-      p_entropy,
-      filename = file.path(path_outdir, "sd~mean_entropy.png"),
-      width = 8,
-      height = 6,
-      unit = "in",
-      dpi = 1000
-    )
-
-    p_entropy
-    ```
-
-### Numbers of trustworthy/dubious metacells per cell label per treatment
-
-```{r}
-p_bar <- ggplot(
-    metacell_summary,
-    aes(
-      x = cell_label_major,
-      fill = mcRigor_sc
-    )
-  ) +
-  geom_bar(
-    width = 0.6,
-    position = position_dodge(0.8, preserve = "single")
-  ) +
-  theme_linedraw(
-  ) + 
-  scale_fill_manual(
-    values = c(
-      "trustworthy" = "#72caed", 
-      "dubious" = "#f57d81"
-    )
-  ) + 
-  facet_grid(
-    individual ~ treatment
-  ) +
-  theme(
-    axis.text.x = element_text(angle = 60, hjust = 1)
-  ) +
-  labs(
-    x = "Major cell label",
-    y = "Number of metacells",
-    fill = "McRigor"
-  ) 
-
-# save figure
-ggsave(
-  p_bar,
-  filename = file.path(path_outdir, "number_of_metacells.png"),
-  width = 10,
-  height = 10,
-  unit = "in",
-  dpi = 1000
-)
-
-# print figure
-p_bar
-```
-
-### Box plot of cell type purity metrics
-
-1.  Purity score
-
-    ```{r}
-    p_box_purity <- ggplot(
-        metacell_summary,
-        aes(
-          x = cell_label_major,
-          y = cell_label_purity,
-          fill = mcRigor_sc
-        )
-      ) + 
-      geom_boxplot(
-        position = position_dodge(0.8, preserve = "single"),
-        width = 0.6
-      ) +
-      scale_fill_manual(
-        values = c(
-          "trustworthy" = "#72caed", 
-          "dubious" = "#f57d81"
-        )
-      ) + 
-      facet_grid(
-        individual ~ treatment
-      ) +
-      theme_linedraw(
-      ) + 
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1)
-      ) +
-      labs(
-        x = "Major cell label",
-        y = "Purity score",
-      )
-
-    # save figure
-    ggsave(
-      p_box_purity,
-      filename = file.path(path_outdir, "boxplot_purity.png"),
-      width = 10,
-      height = 10,
-      unit = "in",
-      dpi = 1000
-    )
-
-    p_box_purity
-    ```
-
-2.  Normalized Shannon Entropy
-
-    ```{r}
-    p_box_entropy <- ggplot(
-        metacell_summary,
-        aes(
-          x = cell_label_major,
-          y = cell_label_entropy,
-          fill = mcRigor_sc
-        )
-      ) + 
-      geom_boxplot(
-        position = position_dodge(0.8, preserve = "single"),
-        width = 0.6
-      ) +
-      scale_fill_manual(
-        values = c(
-          "trustworthy" = "#72caed", 
-          "dubious" = "#f57d81"
-        )
-      ) + 
-      facet_grid(
-        individual ~ treatment
-      ) +
-      theme_linedraw(
-      ) + 
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1)
-      ) +
-      labs(
-        x = "Major cell label",
-        y = "Normalized Shannon Entropy",
-      )
-
-    # save figure
-    ggsave(
-      p_box_entropy,
-      filename = file.path(path_outdir, "boxplot_entropy.png"),
-      width = 10,
-      height = 10,
-      unit = "in",
-      dpi = 1000
-    )
-
-    p_box_entropy
-    ```
-
-## Filter Metacell with too high normalized entropy
-
--   McRigor classification indicates whether a metacell is statistically homogeneous
-
--   Normalized Entropy of cell type labels quantifies whether a metacell is representative of a single discrete cell type
-
-Check if "trustworthy", yet "high entropy" metacells were at the junction of discrete cell types
-
-```{r}
-seurat_obj <- subset(
-  seurat_obj,
-  seurat_obj$orig.ident %in% unique(cell_type_annotation$orig.ident)
-)
+```{r Get metacell coordinates}
+# add cell label to metadata
 seurat_obj$cell_label <- cell_type_annotation[Cells(seurat_obj), "cell_label"]
 seurat_obj$cell_label %<>% factor(levels = cell_order)
 
+# add slingshot output to metadata
+if (DEBUG) {seurat_obj %<>% subset(cells = mtx_slingshot$barcode)}
+seurat_obj@meta.data %<>% cbind(mtx_slingshot)
+seurat_obj@meta.data %<>% mutate (
+    pseudotime = (
+      Lineage1_pseudotime * Lineage1_weight +         
+      Lineage2_pseudotime * Lineage2_weight +
+      Lineage3_pseudotime * Lineage3_weight
+    ) / (Lineage1_weight + Lineage2_weight + Lineage3_weight)
+  )
+
+# calculate metacell coordinates
 emb <- Embeddings(seurat_obj, "umap.cca_seed17") %>% as.data.frame
 colnames(emb) <- c("UMAP_1", "UMAP_2")
 emb$Metacell <- metacell_annotated[row.names(emb), "Metacell"]
@@ -522,12 +379,17 @@ metacell_coordinates <- full_join(
 )
 ```
 
-```{r}
-p_umap <- DimPlot(
+Single-cell label, Metacell label, mcRigor, Entropy
+
+```{r plot UMAP overlay 1}
+# single cell cell label 
+p_sc_labeled <- DimPlot(
     seurat_obj, 
     group.by = "cell_label",
     cols = palette,
     reduction = "umap.cca_seed17"
+  ) + 
+  theme_void(
   ) +
   theme(
     legend.position = "top"
@@ -536,8 +398,11 @@ p_umap <- DimPlot(
     x = "UMAP 1",
     y = "UMAP 2",
     col = "Cell label",
+    axis.text = element_blank(),
     title = NULL
   )
+
+# metacell cell label entropy
 p_label_entropy <- ggplot(
     data = metacell_coordinates,
     aes(
@@ -550,7 +415,7 @@ p_label_entropy <- ggplot(
   ) + 
   scale_color_viridis_c(
   ) +
-  theme_classic(
+  theme_void(
   ) +
   theme(
     legend.position = "bottom"
@@ -560,6 +425,8 @@ p_label_entropy <- ggplot(
     y = "UMAP 2",
     col = "Normalized Entropy (Cell label)"
   )
+
+# metacell trustworthiness (mcRigor)
 p_mcrigor <- ggplot(
     data = metacell_coordinates,
     aes(
@@ -576,7 +443,7 @@ p_mcrigor <- ggplot(
       "dubious" = "#f57d81"
     )
   ) +
-  theme_classic(
+  theme_void(
   ) +
   theme(
     legend.position = "bottom"
@@ -586,7 +453,9 @@ p_mcrigor <- ggplot(
     y = "UMAP 2",
     col = "mcRigor"
   )
-p4 <- ggplot(
+
+# metacell cell label
+p_mc_labeled <- ggplot(
     data = metacell_coordinates,
     aes(
       x = UMAP_1,
@@ -599,19 +468,17 @@ p4 <- ggplot(
   scale_color_manual(
     values = palette
   ) +
-  theme_classic(
+  theme_void(
   ) +
   theme(
     legend.position = "none"
   ) +
   labs(
-    x = "UMAP 1",
-    y = "UMAP 2",
-    col = "Cell label",
-    title = "Metacells (Cell label determined via majority voting)"
+    x = NULL,
+    y = NULL
   )
 
-patch <- (p_umap | p4) / (p_mcrigor | p_label_entropy)
+patch <- (p_sc_labeled | p_mc_labeled) / (p_mcrigor | p_label_entropy)
 
 ggsave(
   patch,
@@ -623,4 +490,310 @@ ggsave(
 )
 
 patch
+```
+
+```{r plot UMAP overlay 2}
+# single cell cell label 
+p_sc_l1 <- FeaturePlot(
+    seurat_obj, 
+    features = c("pseudotime"),
+    reduction = "umap.cca_seed17"
+  ) + 
+  scale_color_viridis_c(
+    direction = -1,
+    option = "magma"
+  ) +
+  theme_void(
+  ) +
+  theme(
+    legend.position = "top"
+  ) +
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2",
+    col = "Pseudotime",
+    axis.text = element_blank(),
+    title = NULL
+  )
+
+# metacell lineage 1
+p_mc_time <- ggplot(
+    data = metacell_coordinates,
+    aes(
+      x = UMAP_1,
+      y = UMAP_2,
+      col = pseudotime
+    )
+   ) + 
+  geom_point(
+  ) + 
+  scale_color_viridis_c(
+    direction = -1,
+    option = "magma"
+  ) +
+  theme_void(
+  ) +
+  theme(
+    legend.position = "bottom"
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    col = "Pseudotime"
+  )
+
+# metacell pseudotime SD
+p_mc_sd <- ggplot(
+    data = metacell_coordinates,
+    aes(
+      x = UMAP_1,
+      y = UMAP_2,
+      col = SD
+    )
+   ) + 
+  geom_point(
+  ) + 
+  scale_color_viridis_c(
+    option = "viridis"
+  ) +
+  theme_void(
+  ) +
+  theme(
+    legend.position = "bottom"
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    col = "Pseudotime SD",
+  )
+
+patchwork <- ( p_sc_labeled | p_sc_l1 ) / ( p_mc_time | p_mc_sd )
+
+ggsave(
+  patchwork,
+  filename = file.path(path_outdir, "umap_overlay2.png"),
+  width = 12,
+  height = 12,
+  unit = "in",
+  dpi = 1000
+)
+
+patchwork
+```
+
+### Metacell pseudotime (with SD) by lineages
+
+```{r plot metacell pseudotime + SD}
+data_plot <- metacell_summary
+data_plot$branch_major %<>% factor(levels = lineage_order)
+data_plot %<>% filter(branch_major %>% is.na %>% not)
+
+#
+p_branch_time <- ggplot(
+    data_plot,
+    aes(
+      x = pseudotime, 
+      y = branch_major,
+      col = cell_label_major
+    )
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  scale_color_manual(
+    values = palette
+  ) +
+  facet_grid(
+    mcRigor_sc~.
+  ) +
+  theme_linedraw(
+  ) +
+  theme(
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Average Pseudotime",
+    y = "Lineages",
+    col = "Major cell label",
+  )
+
+#
+p_time_sd <- ggplot(
+    data_plot,
+    aes(
+      x = pseudotime, 
+      y = pseudotime,
+      ymax = pseudotime + SD,
+      ymin = pseudotime - SD,
+      col = cell_label_major
+    )
+  ) +
+  geom_pointrange(
+    linewidth = .2,
+    size = .02
+  ) +
+  scale_color_manual(
+    values = palette
+  ) +
+  facet_grid(
+    branch_major~mcRigor_sc
+  ) +
+  theme_linedraw(
+  ) +
+  theme(
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Average Pseudotime",
+    y = "Average Pseudotime",
+    col = "Major cell label",
+    subtitle = "dots: average pseudotime; errorbar: ±sd"
+  )
+
+ggsave(
+  p_branch_time,
+  filename = file.path(path_outdir, "pseudotime_by_branch.png"),
+  width = 12,
+  height = 6,
+  unit = "in",
+  dpi = 1000
+)
+ggsave(
+  p_time_sd,
+  filename = file.path(path_outdir, "pseudotime_sd.png"),
+  width = 12,
+  height = 5,
+  unit = "in",
+  dpi = 1000
+)
+
+p_branch_time; p_time_sd
+```
+
+## Final output data.frame
+
+### Pseudotime on Fusiform Lineage (with branching topology)
+
+```{r}
+data_plot <- metacell_summary %>%
+  mutate(
+    fusiform_prob = L1_prob + L2_prob,
+    branch_position = if_else(
+      fusiform_prob > 0,
+      (L2_prob - L1_prob) / fusiform_prob,
+      NA_real_
+    ),
+    fusiform_pseudotime = if_else(
+      fusiform_prob > 0,
+      (L1_pseudotime * L1_prob + L2_pseudotime * L2_prob) / fusiform_prob,
+      NA_real_
+    )
+  )
+
+p_fusiform <- ggplot(
+    data_plot %>% filter(fusiform_prob > 0),
+    aes(
+      x = fusiform_pseudotime,
+      y = branch_position,
+      color = cell_label_major
+    )
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_point(
+    aes(alpha = fusiform_prob),
+    size = 2
+  ) +
+  scale_y_continuous(
+    limits = c(-1.05, 1.05),
+    breaks = c(-1, 0, 1),
+    labels = c(
+      "Fiber",
+      "Fusiform shared",
+      "Vessel"
+    )
+  ) +
+  scale_color_manual(
+    values = palette
+  ) +
+  scale_alpha_continuous(
+    range = c(.01, 1)
+  ) +
+  labs(
+    x = "Fusiform pseudotime",
+    y = "Branch position",
+    color = "Major cell label",
+    alpha = "Fusiform\nprobability"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  p_fusiform,
+  filename = file.path(path_outdir, "pseudotime_fusiform.png"),
+  width = 9,
+  height = 5,
+  unit = "in",
+  dpi = 1000
+)
+
+p_fusiform
+```
+
+```{r}
+p_ray <- ggplot(
+    metacell_summary %>% filter(L3_prob > 0),
+    aes(
+      x = L3_pseudotime,
+      y = L3_prob,
+      color = cell_label_major,
+      alpha = L3_prob
+    )
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  scale_y_continuous(
+    limits = c(-.05, 1.05),
+    breaks = c(0, 1),
+    labels = c("Fusiform", "Ray")
+  ) +
+  scale_color_manual(
+    values = palette
+  ) +
+  labs(
+    x = "Ray pseudotime",
+    y = "Branch position",
+    color = "Major cell label",
+    alpha = "Ray\nprobability"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  )
+
+ggsave(
+  p_ray,
+  filename = file.path(path_outdir, "pseudotime_ray.png"),
+  width = 9,
+  height = 4,
+  unit = "in",
+  dpi = 1000
+)
+
+p_ray
+```
+
+## Export Metacell metadata
+
+```{r}
+write.csv(
+  metacell_summary,
+  path_metacell_metadata
+)
 ```
