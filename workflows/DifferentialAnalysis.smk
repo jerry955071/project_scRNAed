@@ -1,45 +1,46 @@
-# get pseudo-time cell ordering
-rule slingshot:
-    threads: 1
+# perform binomial regression for differential analysis
+# samples and corresponding metadata were included in {input.path_metacell_metadata}
+def call_mc_label_files(wildcards):
+    import pandas as pd
+    df = pd.read_csv("outputs/MetaCell/metacell_summary/metacell_metadata.csv")
+    samples = df["sample"].unique()
+    return [f"outputs/MetaCell/mcrigor/{s}/metacell.csv" for s in samples]
+
+rule binomial_regression:
+    container: "docker://chiaenu/rstudio-rstat:4.4.3"
+    threads: 4
     resources:
-        mem_mb=10000,
-        runtime=100
-    container: "docker://chiaenu/rmd-slingshot:2.4.0"
+        mem_mb=100000,
+        runtime=200
     input:
-        path_cca_embedding="outputs/notebooks-new/Seurat_integration/cca_embedding.csv",
-        path_cell_type_csv="outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv"
-    output:
-        path_pseudo_time="outputs/notebooks-new/Slingshot/pseudotime.csv",
-        path_lineage_weight="outputs/notebooks-new/Slingshot/weight.csv",
-        path_outdir="outputs/notebooks-new/Slingshot"
+        path_mtx_dirs=call_mc_label_files,
+        path_metacell_metadata="outputs/MetaCell/metacell_summary/metacell_metadata.csv",
+        path_seurat_obj="outputs/notebooks-new/Seurat_integration/seurat_integrated.rds",
+        path_hom_loci="outputs/VariantCalling-DNA/gatk_joint/ptr/hom_ref.vcf",
+        path_variant_annotation="outputs/VariantAnnotation/variant_annotation/ptr/variant_annotation.txt",
+        path_variant_location="outputs/VariantAnnotation/variant_annotation/ptr/variant_location.txt"
+    output:    
+        path_outdir=directory("outputs/DEA_Regression/binomial_regression/")
+    params:
+        path_mtx_dirs="outputs/MetaCell/aggregate_metacell_vartrix/%s",
+        DEBUG="FALSE"
     log:
-        "logs/DifferentialAnalysis/slingshot.log"
+        "logs/DifferentialAnalysis/binomial_regression.log"
     shell:
         """
         Rscript -e "rmarkdown::render(
-            'notebooks-new/Slingshot.Rmd',
-            output_dir = '{output.path_outdir}',
-            output_file = 'slingshot.html',
+            input = 'notebooks-new/DEA_Regression.Rmd',
+            output_file = 'binomial_regression.html',
             knit_root_dir = '~',
             params = list(
-                path_cca_embedding = '{input.path_cca_embedding}',
-                path_cell_type_csv='{input.path_cell_type_csv}',
-                path_pseudo_time='{output.path_pseudo_time}',
-                path_lineage_weight='{output.path_lineage_weight}',
-                path_outdir='{output.path_outdir}'
+                path_mtx_dirs='{params.path_mtx_dirs}',
+                path_metacell_metadata='{input.path_metacell_metadata}',
+                path_seurat_obj='{input.path_seurat_obj}',
+                path_hom_loci='{input.path_hom_loci}',
+                path_variant_annotation='{input.path_variant_annotation}',
+                path_variant_location='{input.path_variant_location}',
+                path_outdir='{output.path_outdir}',
+                DEBUG='{params.DEBUG}'
             )
         )" 2>&1 > {log}
         """
-
-
-# perform beta-binomial regression for differential analysis
-# samples and corresponding metadata were included in {input.cell_labels}
-rule beta_binomial_regression:
-    input:
-        alt_mtx_template="outputs/MetaCell/aggregate_metacell_vartrix/{{sample}}/alt.mtx",
-        ref_mtx_template="outputs/MetaCell/aggregate_metacell_vartrix/{{sample}}/ref.mtx",
-        row_idx_template="outputs/MetaCell/aggregate_metacell_vartrix/{{sample}}/row_idx.txt",
-        col_idx_template="outputs/MetaCell/aggregate_metacell_vartrix/{{sample}}/col_idx.txt",
-        cell_labels="outputs/MetaCell/metacell_label_annotation/metacell_annotation.csv",
-        pseudo_time="outputs/notebooks-new/Slingshot/pseudotime.csv",
-        lineage_weight="outputs/notebooks-new/Slingshot/weight.csv"

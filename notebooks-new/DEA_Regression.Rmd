@@ -1,0 +1,792 @@
+---
+params:
+  path_mtx_dirs: outputs/MetaCell/aggregate_metacell_vartrix/%s
+  path_metacell_metadata: tests/MetaCell/metacell_trajectory_weight/metacell_metadata.csv
+  path_seurat_obj: outputs/notebooks-new/Seurat_integration/seurat_integrated.rds
+  path_hom_loci: outputs/VariantCalling-DNA/gatk_joint/ptr/hom_ref.vcf
+  path_variant_annotation: tests/VariantAnnotation-ptr-multi/variant_annotation.tsv
+  path_variant_location: tests/VariantAnnotation-ptr-multi/variant_location.tsv
+  path_outdir: tests/MetaCell/DEA_Regression
+  DEBUG: FALSE
+---
+
+## Setup
+
+```{r Setup}
+library(glmmTMB)
+library(tidyr)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(patchwork)
+library(Seurat)
+library(Matrix)
+library(ComplexUpset)
+library(data.table)
+
+# parallel
+library(parallel)
+# Prevent each parallel worker from spawning additional computational threads
+Sys.setenv(
+  OMP_NUM_THREADS = 1,
+  OPENBLAS_NUM_THREADS = 1,
+  MKL_NUM_THREADS = 1,
+  VECLIB_MAXIMUM_THREADS = 1,
+  NUMEXPR_NUM_THREADS = 1
+)
+
+
+cell_order <- c("FuO", "RO", "FuEP", "RP", "FuIP", "Ray", "Vessel", "Fiber")
+lineages <- list(
+  "Lineage1" = c("FuO", "FuEP", "FuIP", "Fiber"),
+  "Lineage2" = c("FuO", "FuEP", "FuIP", "Vessel"),
+  "Lineage3" = c("RO", "RP", "Ray")
+)
+lineage_order <- c(
+  "Fusiform late (Fiber)",
+  "Fusiform early (Shared)",
+  "Fusiform late (Vessel)",
+  "Ray Lineage"
+)
+palette <- c(
+  "FuO" = "#9467BD",
+  "RO" = "#FF7F0F",
+  "FuEP" = "#2AA02A",
+  "RP" = "#F8E71C",
+  "FuIP" = "#8C564B",
+  "Ray" = "#E377C2",
+  "Vessel" = "#1F77B4",
+  "Fiber" = "#D62728",
+  "Outlier_9" = "#d4d4d4",
+  "Outlier_10" = "#d4d4d4",
+  "Outlier_11" = "#d4d4d4",
+  "unannotated" = "#d4d4d4"
+)
+```
+
+## Parse Rmd parameters
+
+```{r Parse Rmd parameters}
+path_mtx_dirs <- params$path_mtx_dirs
+path_metacell_metadata <- params$path_metacell_metadata
+path_seurat_obj <- params$path_seurat_obj
+path_hom_loci <- params$path_hom_loci
+path_variant_annotation <- params$path_variant_annotation
+path_variant_location <- params$path_variant_location
+path_outdir <- params$path_outdir
+DEBUG <- params$DEBUG
+```
+
+Create output directory
+
+```{r Create output directory}
+dir.create(path_outdir, recursive = TRUE)
+```
+
+## Import data
+
+### Read genotype data
+
+```{r Read genotype data}
+hom_vcf <- fread(
+  path_hom_loci,
+  skip = "#CHROM",
+  header = TRUE
+)
+head(hom_vcf)
+hom_loci <- paste0(hom_vcf$`#CHROM`, ":", hom_vcf$POS)
+head(hom_loci)
+```
+
+### Read variant annotation data
+
+```{r Read variant annotation data}
+var_anno <- fread(path_variant_annotation)
+var_loc <- fread(path_variant_location)
+var_anno$INDEX <- paste(var_anno$CHROM, var_anno$POS, sep = ":")
+var_loc$INDEX <- paste(var_loc$CHROM, var_loc$POS, sep = ":")
+setkey(var_anno, INDEX)
+setkey(var_loc, INDEX)
+```
+
+### Read metacell metadata
+
+```{r Read metacell metadata}
+metacell_metadata <- read.csv(path_metacell_metadata, row.names = 1)
+metacell_metadata$cell_label_major %<>% factor(levels = cell_order)
+for (col_name in  select(metacell_metadata, where(is.character)) %>% colnames) {
+  metacell_metadata[[col_name]] %<>% factor
+}
+row.names(metacell_metadata) <- paste0(
+  metacell_metadata$sample,
+  "_mc-",
+  metacell_metadata$Metacell
+)
+str(metacell_metadata)
+```
+
+### Read ref/alt matrix
+
+```{r Read ref/alt matrix}
+alt_mtx_list <- list()
+ref_mtx_list <- list()
+for (s in metacell_metadata$sample %>% unique) {
+  #
+  path_mtx_dir_tmp <- sprintf(path_mtx_dirs, s)
+  
+  # 
+  alt_mtx_tmp <- ReadMtx(
+    mtx = file.path(path_mtx_dir_tmp, "alt.mtx"),
+    cells = file.path(path_mtx_dir_tmp, "col_idx.txt"),
+    cell.column = 1,
+    features = file.path(path_mtx_dir_tmp, "row_idx.txt"),
+    feature.column = 1,
+  ) %>% CreateSeuratObject(
+    project = s
+  ) %>% RenameCells(
+    add.cell.id = s
+  )
+  ref_mtx_tmp <- ReadMtx(
+    mtx = file.path(path_mtx_dir_tmp, "ref.mtx"),
+    cells = file.path(path_mtx_dir_tmp, "col_idx.txt"),
+    cell.column = 1,
+    features = file.path(path_mtx_dir_tmp, "row_idx.txt"),
+    feature.column = 1,
+  ) %>% CreateSeuratObject(
+    project = s
+  ) %>% RenameCells(
+    add.cell.id = s
+  )
+  
+  #
+  alt_mtx_list %<>% append(alt_mtx_tmp)
+  ref_mtx_list %<>% append(ref_mtx_tmp)
+}
+
+# merge objects
+alt_mtx <- merge(
+  x = alt_mtx_list[[1]],
+  y = alt_mtx_list[-1]
+)
+ref_mtx <- merge(
+  x = ref_mtx_list[[1]],
+  y = ref_mtx_list[-1]
+)
+
+alt_mtx %<>% JoinLayers()
+ref_mtx %<>% JoinLayers()
+
+# subset to homozygous reference loci
+dim(alt_mtx)
+dim(ref_mtx)
+alt_mtx %<>% subset(features = hom_loci)
+ref_mtx %<>% subset(features = hom_loci)
+dim(alt_mtx)
+dim(ref_mtx)
+
+# incorporate metadata
+alt_mtx@meta.data %<>% cbind(metacell_metadata[Cells(alt_mtx), ])
+ref_mtx@meta.data %<>% cbind(metacell_metadata[Cells(ref_mtx), ])
+
+# cleanup
+rm(alt_mtx_list, ref_mtx_list, alt_mtx_tmp, ref_mtx_tmp)
+
+#
+alt_mtx; ref_mtx; str(alt_mtx@meta.data)
+```
+
+## Extract alt/ref read counts
+
+```{r Extract alt/ref read counts}
+alt_count <- LayerData(alt_mtx, assay = "RNA", layer = "counts")
+ref_count <- LayerData(ref_mtx, assay = "RNA", layer = "counts")
+ttl_count <- alt_count + ref_count
+```
+
+## QC
+
+### Read depth \~ N Cells per locus
+
+```{r QC}
+nCells <- rowSums((alt_count > 0) | (ref_count > 0))
+n_cell_avg_depth <- data.frame(
+  "n_cell" = nCells,
+  "mean_depth" = rowSums(ttl_count) / nCells
+)
+
+#
+p_xy <- ggplot(
+    n_cell_avg_depth,
+    aes(
+      x = n_cell,
+      y = mean_depth
+    )
+  ) +
+  geom_point(
+    size = .1
+  ) +
+  scale_x_log10(
+  ) +
+  scale_y_log10(
+  ) +
+  coord_cartesian(
+    xlim = c(1, 2000),
+    ylim = c(1, 2000)
+  ) +
+  theme_bw(
+  ) +
+  labs(
+    x = "N Cells",
+    y = "Average Read Depth",
+    caption = "Each dot equals one locus"
+  )
+#
+p_dens_x <- ggplot(
+    n_cell_avg_depth,
+    aes(
+      x = n_cell,
+    )
+  ) +
+  geom_histogram(
+  ) +
+  scale_x_log10(
+  ) +
+  coord_cartesian(
+    xlim = c(1, 2000)
+  ) +
+  theme_classic(
+  ) + 
+  labs(
+    x = NULL
+  )
+#
+p_dens_y <- ggplot(
+    n_cell_avg_depth,
+    aes(
+      y = mean_depth,
+    )
+  ) +
+  geom_histogram(
+  ) +
+  scale_y_log10(
+  ) +
+  coord_cartesian(
+    ylim = c(1, 2000)
+  ) +
+  theme_classic(
+  ) +
+  labs(
+    y = NULL
+  )
+
+# 
+p_patch <- (
+    p_dens_x + plot_spacer() +
+    p_xy     + p_dens_y
+  ) +
+    plot_layout(
+      ncol = 2,
+      widths = c(5, 1),
+      heights = c(1, 5),
+      byrow = TRUE
+    ) &
+    theme(
+      plot.margin = margin(0, 0, 0, 0, "in")
+    )
+
+ggsave(
+  p_patch,
+  filename = file.path(path_outdir, "average_read_depth_per_locus.png"),
+  width = 9,
+  height = 6,
+  unit = "in",
+  dpi = 1000
+)
+p_patch
+```
+
+## Set cutoff on `N cells` and `average read depth` for performing differential RNA editing
+
+```{r Set cutoff}
+cutoff_n_cells <- 100
+cutoff_avg_depth <- 10
+loci_passing_filter <- n_cell_avg_depth %>% filter(
+    (n_cell >= cutoff_n_cells) &
+    (mean_depth >= cutoff_avg_depth)
+  )
+p_xy_line <- p_xy + 
+  geom_vline(
+    xintercept = 100, 
+    color = "red", 
+    linetype = "dotted"
+  ) +
+  geom_hline(
+    yintercept = 10,
+    color = "red",
+    linetype = "dotted"
+  ) +
+  annotate(
+    "text", 
+    x = 500,
+    y = 100,
+    label = paste0("N = ", nrow(loci_passing_filter)),
+    size = 5, 
+    colour = "red"
+  )
+
+p_patch_cutoff <- (
+    p_dens_x  + plot_spacer() +
+    p_xy_line + p_dens_y
+  ) +
+    plot_layout(
+      ncol = 2,
+      widths = c(5, 1),
+      heights = c(1, 5),
+      byrow = TRUE
+    ) &
+    theme(
+      plot.margin = margin(0, 0, 0, 0, "in")
+    )
+
+ggsave(
+  p_patch_cutoff,
+  filename = file.path(path_outdir, "average_read_depth_per_locus_cutoff.png"),
+  width = 9,
+  height = 6,
+  unit = "in",
+  dpi = 1000
+)
+
+p_patch_cutoff
+```
+
+## Test model
+
+### Set testing locus and subset data
+
+```{r Test model}
+test_locus <- "Chr01:49108455"
+
+# subset metacells  
+keep_metacells <- with(
+  alt_mtx@meta.data,
+  mcRigor_sc == "trustworthy" &
+  is.finite(pseudotime) &
+  L1_weight > 0.5
+)
+
+# get locus data
+dat <- ref_mtx@meta.data[keep_metacells, ] %>%
+  mutate(
+    # get count data
+    alt = LayerData(
+      alt_mtx, 
+      assay = "RNA", 
+      layer = "counts",
+      cells = Cells(alt_mtx)[keep_metacells],
+      features = test_locus
+    ) %>% as.numeric,
+    ref = LayerData(
+      ref_mtx, 
+      assay = "RNA", 
+      layer = "counts",
+      cells = Cells(ref_mtx)[keep_metacells],
+      features = test_locus
+    ) %>% as.numeric,
+    
+    # relevel using normal as reference
+    treatment = relevel(factor(treatment), ref = "normal"),
+    
+    # calculate total depth for filtering
+    total = alt + ref
+  ) %>%
+  filter(
+    total > 0
+  )
+
+# check if treatment/individual are balanced at this locus
+print(paste0("Locus: ", test_locus))
+table(dat$treatment)
+table(dat$individual)
+```
+
+### QC
+
+```{r}
+p_occurance <- ggplot(
+    dat,
+    aes(
+      x = pseudotime,
+      color = treatment,
+      fill = treatment
+    )
+  ) +
+  geom_density(
+    alpha = 0.15
+  ) +
+  theme_classic(
+  ) +
+  labs(
+    x = "Pseudotime",
+    y = "Density",
+    subtitle = "Number of metacells along the pseudotime trajectory"
+  )
+p_occurance
+```
+
+### Model 0: Editing \~ treatment
+
+Does the overall RNA-editing level differ among treatments, including differences caused by their different developmental-state composition?
+
+```{r}
+# fit Y ~ treatement model
+m0 <- glmmTMB(
+  cbind(alt, ref) ~ treatment + (1 | individual) + (1 | sample),
+  family = binomial(link = "logit"),
+  data = dat
+)
+summary(m0)
+```
+
+Plot editing \~ treatment boxplot
+
+```{r}
+p_edit_treatment <- ggplot(
+    dat[sample(nrow(dat), replace = FALSE), ],
+    aes(
+      x = treatment,
+      y = alt / total,
+      col = treatment
+    )
+  ) +
+  geom_boxplot(
+  ) +
+  theme_classic(
+  ) +
+  labs(
+    x = "Treatment",
+    y = "Editing level",
+    col = NULL
+  )
+
+p_edit_treatment
+```
+
+### Model 1: Editing \~ treatment + overall pseudotime
+
+At comparable developmental positions, is there still a treatment-associated difference in editing?
+
+```{r}
+# fit Y ~ treatment + f(T) model
+m1 <- glmmTMB(
+  cbind(alt, ref) ~ 
+    treatment + 
+    splines::ns(pseudotime, df = 3) + 
+    (1 | individual) +
+    (1 | sample),
+  family = binomial(link = "logit"),
+  data = dat
+)
+summary(m1)
+```
+
+Plot model 1
+
+```{r}
+pred_dat <- expand.grid(
+  pseudotime = seq(
+    min(dat$pseudotime),
+    max(dat$pseudotime),
+    length.out = 200
+  ),
+  treatment = levels(dat$treatment),
+  individual = dat$individual[1],
+  sample = dat$sample[1]
+)
+
+pred <- predict(
+  m1,
+  newdata = pred_dat,
+  type = "response",
+  se.fit = TRUE,
+  re.form = NA
+)
+
+pred_dat$fit <- pred$fit
+pred_dat$se  <- pred$se.fit
+
+p_m1 <- ggplot(
+    dat,
+    aes(
+      x = pseudotime,
+      y = alt / total,
+      color = treatment
+    )
+  ) +
+  geom_point(
+    aes(
+      size = total
+    ),
+    alpha = 0.15
+  ) +
+  geom_line(
+    data = pred_dat,
+    aes(
+      y = fit
+    ),
+    linewidth = 1
+  ) +
+  scale_size_continuous(
+    range = c(0.2, 2)
+  ) +
+  theme_classic() +
+  labs(
+    x = "Pseudotime",
+    y = "Editing level",
+    size = "Read depth"
+  )
+
+p_m1
+```
+
+#### Model 0 vs 1
+
+```{r}
+anova(m0, m1, test = "Chisq")
+```
+
+## Parallelized Model Testing
+
+```{r Parallelized Model Testing}
+source("notebooks-new/DEA_Regression.R")
+```
+
+```{r Smoke test}
+candidate_loci <- row.names(loci_passing_filter)
+test_results <- run_loci(
+  loci = candidate_loci[1:5],
+  verbose = TRUE
+)
+
+str(test_results$L1_p_treatment_adj)
+# should be numeric
+
+str(test_results$L1_n_obs)
+# should be integer
+
+str(test_results$L1_ok_additive)
+# should be logical
+
+str(test_results$L1_family)
+# should be character
+```
+
+```{r Run tests}
+candidate_loci <- row.names(loci_passing_filter)
+system.time({
+  results <- run_loci_parallel(
+  loci = candidate_loci,
+  n_cores = 4,
+  weight_cutoff = 0.5,
+  spline_df = 3
+  )
+})
+results <- add_fdr(results)
+write.csv(
+  results,
+  file.path(path_outdir, "results.csv")
+)
+```
+
+## Visualize test results
+
+### 1. Upset plot
+
+Prepare plot data
+
+```{r Plot Upset}
+lineages <- c("L1", "L2", "L3")
+model_levels <- c(
+  "Not tested",
+  "Null",
+  "Treatment",
+  "Pseudotime",
+  "Additive"
+)
+
+# Prepare data
+data_upset <- results %>% 
+  select(
+    locus,
+    L1_model,
+    L2_model,
+    L3_model
+  )
+
+# Create one Boolean column for every lineage × model combination
+for (lineage in lineages) {
+  model_col <- paste0(lineage, "_model")
+  for (model in model_levels) {
+    set_col <- paste0(lineage, "__", model)
+    data_upset[[set_col]] <- data_upset[[model_col]] == model
+  }
+}
+
+# Sets in the order we want them displayed
+set_cols <- lapply(
+    model_levels,
+    function(model_level) {
+      paste0(lineages, "__", model_level)
+    }
+  ) %>% unlist
+
+# Pretty labels
+set_labels <- setNames(gsub("__", ": ", set_cols) %>% unlist, set_cols)
+```
+
+Plot
+
+```{r}
+p_model_upset <- ComplexUpset::upset(
+  data_upset,
+  intersect = set_cols,
+  # Every locus should have exactly:
+  # one L1 state + one L2 state + one L3 state
+  min_degree = 3,
+  max_degree = 3,
+  min_size = 1, # Prevent empty patterns from overwhelming the plot
+  sort_sets = FALSE, # Keep L1/L2/L3 ordering
+  sort_intersections_by = "cardinality", # Largest combinations first
+  width_ratio = 0.18,
+  encode_sets = FALSE,
+  labeller = function(x) {
+    sub("__", ": ", x)
+  },
+  base_annotations = list(
+    "Number of loci" = intersection_size(counts = TRUE)
+  ),
+  set_sizes = upset_set_size(
+    geom = geom_bar(width = 0.7)
+  )
+) +
+  labs(
+    title = "RNA editing model patterns across developmental lineages"
+  )
+
+ggsave(
+  p_model_upset,
+  filename = file.path(path_outdir, "upset_lineage_model.png"),
+  width = 12,
+  height = 8,
+  unit = "in",
+  dpi = 1000
+)
+
+p_model_upset
+```
+
+### 2. Editing \~ Pseudotime (per locus)
+
+```{r Plot editing ~ Pseudotime}
+path_plot_out <- file.path(path_outdir, "editing_levels")
+dir.create(path_plot_out, showWarnings = TRUE, recursive = TRUE)
+for (row_idx in 1:nrow(results)) {
+  locus <- results[row_idx, "locus"] %>% sub(":", "_", .)
+  p_editing_time <- plot_locus_result(results[row_idx,])
+  ggsave(
+    p_editing_time,
+    filename = file.path(path_plot_out, paste0(locus, ".png")),
+    width = 12,
+    height = 8,
+    unit = "in",
+    dpi = 1000
+  ) 
+}
+
+```
+
+## Combine with Variant Annotation
+
+```{r Add variant annotation}
+# find loci where pseudotime and/or treatment significantly effect editing
+loci_any <- results %>%
+  select(
+    L1_model,
+    L2_model,
+    L3_model
+  ) %>%
+  mutate(
+    L1_model = L1_model %in% c("Pseudotime", "Treatment", "Additive"),
+    L2_model = L2_model %in% c("Pseudotime", "Treatment", "Additive"),
+    L3_model = L3_model %in% c("Pseudotime", "Treatment", "Additive")
+  )
+loci_any <- results[rowSums(loci_any) > 0, "locus"]
+
+# Prevent inflation by ignoring variant annotation on transcript isoforms unless the consequence are different
+var_data <- full_join(
+  var_anno[intersect(loci_any, var_anno$INDEX)] %>% 
+    distinct(
+      INDEX, GENEID, CONSEQUENCE,
+      .keep_all = TRUE
+    ),
+  var_loc[loci_any] %>% 
+    distinct(
+      INDEX, GENEID, LOCATION,
+      .keep_all = TRUE
+    ),
+  by = c("INDEX", "GENEID")
+) %>%
+  select(
+    -CHROM.x,
+    -CHROM.y,
+    -POS.x,
+    -POS.y
+  ) %>%
+  relocate(
+    INDEX
+  )
+
+# plot
+p_var_anno <- ggplot(
+    var_data,
+    aes(
+      x = LOCATION,
+      fill = CONSEQUENCE
+    )
+  ) +
+  geom_bar(
+  ) +
+  geom_text(
+    aes(label = after_stat(count)),
+    stat = "count", 
+    position = position_stack(vjust = 0.5)
+  ) +
+  theme_bw(
+  ) +
+  labs(
+    x = "Location on a gene",
+    y = "Counts",
+    fill = "Outcome"
+  )
+
+ggsave(
+  p_var_anno,
+  filename = file.path(path_outdir, "editing_outcome.png"),
+  width = 6,
+  height = 4,
+  unit = "in",
+  dpi = 1000
+)
+
+p_var_anno
+```
+
+Export outcome of editing
+
+```{r Export editing outcomes}
+write.csv(
+  var_data,
+  file.path(path_outdir, "editing_outcome.csv"),
+  row.names = FALSE
+)
+```
