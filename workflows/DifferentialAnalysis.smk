@@ -11,7 +11,7 @@ rule binomial_regression:
     threads: 4
     resources:
         mem_mb=100000,
-        runtime=200
+        runtime=40
     input:
         path_mtx_dirs=call_mc_label_files,
         path_metacell_metadata="outputs/MetaCell/metacell_summary/metacell_metadata.csv",
@@ -30,6 +30,7 @@ rule binomial_regression:
         """
         Rscript -e "rmarkdown::render(
             input = 'notebooks-new/DEA_Regression.Rmd',
+            output_dir = '{output.path_outdir}',
             output_file = 'binomial_regression.html',
             knit_root_dir = '~',
             params = list(
