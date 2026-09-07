@@ -1,9 +1,9 @@
 ---
 params:
   path_metacell_annotated: tests/metacell_annotation/metacell_annotation.csv
-  path_mc_label_template: outputs/MetaCell/mcrigor/{sample}/metacell.csv
+  path_mc_label_template: outputs/MetaCell/mcrigor/%s/metacell.csv
   path_cell_type_annotation: outputs/notebooks-new/Cell_type_annotation/cell_type_annotation.csv
-  path_outdir: outputs/MetaCell/metacell_label_annotation
+  path_outdir: tests/MetaCell/metacell_label_annotation
   path_seurat_obj: outputs/notebooks-new/Seurat_integration/seurat_integrated.rds
 ---
 
@@ -75,7 +75,7 @@ Read MetaCell membership labels
 ```{r}
 metacell_memberships <- data.frame()
 for (sname in unique(cell_type_annotation$orig.ident)) {
-  tmp <- read.csv(glue(path_mc_label_template, sample = sname), row.names = 1)
+  tmp <- read.csv(sprintf(path_mc_label_template, sname), row.names = 1)
   sample_suffix <- cell_type_annotation %>% 
     subset(orig.ident == sname) %>% 
     row.names %>% 
