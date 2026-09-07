@@ -340,6 +340,68 @@ str(metacell_summary)
 
 ## Visualization
 
+### Number of single cells and metacells per sample
+
+```{r}
+p_bar_sc <- ggplot(
+    cell_type_annotation,
+    aes(
+      x = individual,
+      fill = treatment
+    )
+  ) + 
+  geom_bar(
+    position = position_dodge(preserve = "total")
+  ) +
+  theme_bw(
+  ) +
+  labs(
+    x = NULL,
+    y = "Counts",
+    fill = "Treatment",
+    title = "Number of single cells per sample"
+  )
+p_bar_mc <- ggplot(
+    metacell_summary,
+    aes(
+      x = individual,
+      fill = treatment
+    )
+  ) + 
+  geom_bar(
+    position = position_dodge(preserve = "total")
+  ) +
+  facet_grid(
+    mcRigor_sc~.
+  ) +
+  theme_bw(
+  ) +
+  labs(
+    x = "Individual",
+    y = "Counts",
+    fill = "Treatment",
+    title = "Number of metacells per sample"
+  )
+
+# combine plots
+p_patch <-  (p_bar_sc + p_bar_mc) +
+    plot_layout(
+      nrow = 2,
+      heights = c(1, 2),
+      byrow = FALSE
+    ) 
+
+# save plot
+ggsave(
+  filename = file.path(path_outdir, "cell_counts.png"),
+  width = 6,
+  height = 6,
+  unit = "in",
+  dpi = 1000
+)
+p_patch
+```
+
 ### Overlay statistics on integrated UMAP embedding
 
 Get metacell coordinates
